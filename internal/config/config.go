@@ -19,9 +19,10 @@ type NomadConfig struct {
 }
 
 type HAProxyConfig struct {
-	Address  string `json:"address"`
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Address         string `json:"address"`
+	Username        string `json:"username"`
+	Password        string `json:"password"`
+	BackendStrategy string `json:"backend_strategy"`
 }
 
 type LogConfig struct {
@@ -38,9 +39,10 @@ func Load(configFile string) (*Config, error) {
 			Region:  getEnv("NOMAD_REGION", "global"),
 		},
 		HAProxy: HAProxyConfig{
-			Address:  getEnv("HAPROXY_DATAPLANE_URL", "http://localhost:5555"),
-			Username: getEnv("HAPROXY_USERNAME", "admin"),
-			Password: getEnv("HAPROXY_PASSWORD", "adminpwd"),
+			Address:         getEnv("HAPROXY_DATAPLANE_URL", "http://localhost:5555"),
+			Username:        getEnv("HAPROXY_USERNAME", "admin"),
+			Password:        getEnv("HAPROXY_PASSWORD", "adminpwd"),
+			BackendStrategy: getEnv("HAPROXY_BACKEND_STRATEGY", "use_existing"),
 		},
 		Log: LogConfig{
 			Level: getEnv("LOG_LEVEL", "info"),

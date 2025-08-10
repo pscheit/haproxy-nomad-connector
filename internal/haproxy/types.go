@@ -57,3 +57,11 @@ type HealthCheck struct {
 	Method string
 	Host   string
 }
+
+type BackendStrategy string
+
+const (
+	BackendStrategyCreateNew       BackendStrategy = "create_new"
+	BackendStrategyUseExisting     BackendStrategy = "use_existing"
+	BackendStrategyFailOnConflict  BackendStrategy = "fail_on_conflict"
+)

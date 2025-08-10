@@ -122,10 +122,27 @@ Environment variables or JSON config file:
   "haproxy": {
     "address": "http://localhost:5555", 
     "username": "admin",
-    "password": "adminpwd"
+    "password": "adminpwd",
+    "backend_strategy": "use_existing"
   }
 }
 ```
+
+### Backend Strategy Options
+
+Controls how the connector handles existing backends:
+
+- **`use_existing`** (default) - Use existing compatible backends, create new ones if needed
+- **`create_new`** - Always create new backends, fail if they already exist  
+- **`fail_on_conflict`** - Fail fast with clear error if backend already exists
+
+### Backend Compatibility
+
+For dynamic services, the connector checks that existing backends have:
+- `balance roundrobin` algorithm
+- Compatible configuration for dynamic server management
+
+If an incompatible backend exists, the connector will fail with a clear error message instead of silently ignoring the issue.
 
 ## 🔍 Comparison
 
@@ -151,16 +168,18 @@ See integration tests for examples of the expected behavior.
 
 ## 📝 Status
 
-**Early Development** - Core functionality working:
+**Production Ready** - Core functionality complete:
 
 - ✅ Data Plane API integration
 - ✅ Service classification from tags
-- ✅ Dynamic backend creation  
+- ✅ Dynamic backend creation with conflict detection
 - ✅ Server lifecycle management
 - ✅ Configuration persistence
-- 🔄 Nomad event stream listener (next)
-- 🔄 Custom backend support
-- 🔄 Advanced health check config
+- ✅ Nomad event stream listener
+- ✅ Backend compatibility checking
+- ✅ Robust error handling and clear error messages
+- 🔄 Custom backend support (planned)
+- 🔄 Advanced health check config (planned)
 
 ---
 

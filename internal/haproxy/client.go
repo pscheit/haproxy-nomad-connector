@@ -58,11 +58,20 @@ func (c *Client) GetConfigVersion() (int, error) {
 	return version, nil
 }
 
-// GetBackends lists all backends
 func (c *Client) GetBackends() ([]Backend, error) {
 	var backends []Backend
 	err := c.makeRequest("GET", "/v3/services/haproxy/configuration/backends", nil, &backends, 0)
 	return backends, err
+}
+
+func (c *Client) GetBackend(name string) (*Backend, error) {
+	var backend Backend
+	path := fmt.Sprintf("/v3/services/haproxy/configuration/backends/%s", name)
+	err := c.makeRequest("GET", path, nil, &backend, 0)
+	if err != nil {
+		return nil, err
+	}
+	return &backend, nil
 }
 
 // CreateBackend creates a new backend
@@ -149,4 +158,15 @@ func (c *Client) makeRawRequest(method, path string, body interface{}, version i
 	req.Header.Set("Accept", "application/json")
 
 	return c.httpClient.Do(req)
+}
+
+func (c *Client) GetServers(backendName string) ([]Server, error) {
+	var servers []Server
+	path := fmt.Sprintf("/v3/services/haproxy/configuration/backends/%s/servers", backendName)
+	err := c.makeRequest("GET", path, nil, &servers, 0)
+	return servers, err
+}
+
+func IsBackendCompatibleForDynamicService(backend *Backend) bool {
+	return backend.Balance.Algorithm == "roundrobin"
 }

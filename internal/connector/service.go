@@ -107,37 +107,55 @@ func processDynamicService(ctx context.Context, client *haproxy.Client, event Se
 }
 
 func handleServiceRegistration(ctx context.Context, client *haproxy.Client, event ServiceEvent) (interface{}, error) {
-	// Get current config version
 	version, err := client.GetConfigVersion()
 	if err != nil {
 		return nil, err
 	}
 	
-	// Create backend name from service name (sanitize)
 	backendName := sanitizeServiceName(event.Service.ServiceName)
 	
-	// Create backend
-	backend := haproxy.Backend{
-		Name: backendName,
-		Balance: haproxy.Balance{
-			Algorithm: "roundrobin",
-		},
+	existingBackend, err := client.GetBackend(backendName)
+	if err == nil {
+		if !haproxy.IsBackendCompatibleForDynamicService(existingBackend) {
+			return nil, fmt.Errorf("backend %s already exists with incompatible configuration (algorithm: %s, expected: roundrobin)", 
+				backendName, existingBackend.Balance.Algorithm)
+		}
+	} else {
+		backend := haproxy.Backend{
+			Name: backendName,
+			Balance: haproxy.Balance{
+				Algorithm: "roundrobin",
+			},
+		}
+		
+		_, err = client.CreateBackend(backend, version)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create backend %s: %w", backendName, err)
+		}
+		
+		version, err = client.GetConfigVersion()
+		if err != nil {
+			return nil, err
+		}
 	}
 	
-	_, err = client.CreateBackend(backend, version)
-	if err != nil {
-		// Backend might already exist - that's ok for now
-		// TODO: Handle this more gracefully
-	}
-	
-	// Get new version for server creation
-	newVersion, err := client.GetConfigVersion()
-	if err != nil {
-		return nil, err
-	}
-	
-	// Add server to backend
 	serverName := generateServerName(event.Service.ServiceName, event.Service.Address, event.Service.Port)
+	
+	existingServers, err := client.GetServers(backendName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get existing servers for backend %s: %w", backendName, err)
+	}
+	
+	for _, existingServer := range existingServers {
+		if existingServer.Name == serverName {
+			return map[string]string{
+				"status":  "already_exists",
+				"backend": backendName,
+				"server":  serverName,
+			}, nil
+		}
+	}
+	
 	server := haproxy.Server{
 		Name:    serverName,
 		Address: event.Service.Address,
@@ -145,9 +163,9 @@ func handleServiceRegistration(ctx context.Context, client *haproxy.Client, even
 		Check:   "enabled",
 	}
 	
-	_, err = client.CreateServer(backendName, server, newVersion)
+	_, err = client.CreateServer(backendName, server, version)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create server %s in backend %s: %w", serverName, backendName, err)
 	}
 	
 	return map[string]string{
