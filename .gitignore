@@ -1,0 +1,23 @@
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/haproxy-nomad-connector
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go workspace file
+go.work
+
+# HAProxy Data Plane API generated directories (from Docker dev setup)
+dev/dataplane/
+dev/general/
+dev/maps/
+dev/spoe/
+dev/ssl/

@@ -1,0 +1,23 @@
+services:
+  haproxy:
+    image: haproxytech/haproxy-alpine:3.0
+    container_name: haproxy-test
+    ports:
+      - "8080:80"
+      - "8443:443" 
+      - "8099:8099"  # stats
+      - "5555:5555"  # Data Plane API
+    volumes:
+      - ./dev:/usr/local/etc/haproxy:rw
+
+  # Test backend service
+  test-backend:
+    image: nginx:alpine
+    container_name: test-backend
+    ports:
+      - "3001:80"
+    volumes:
+      - ./dev/nginx.conf:/etc/nginx/nginx.conf:ro
+
+volumes:
+  haproxy-sockets:

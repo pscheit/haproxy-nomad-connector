@@ -1,0 +1,25 @@
+config_version: 2
+name: f3a6278438c1
+dataplaneapi:
+  host: 0.0.0.0
+  port: 5555
+  advertised:
+    api_address: ""
+    api_port: 0
+  scheme:
+  - http
+  userlist:
+    userlist: dataplaneapi
+    userlist_file: ""
+  user:
+  - name: admin
+    insecure: true
+    password: adminpwd
+haproxy:
+  config_file: /usr/local/etc/haproxy/haproxy.cfg
+  haproxy_bin: /usr/local/sbin/haproxy
+  reload:
+    reload_cmd: kill -SIGUSR2 $(pidof haproxy)
+    restart_cmd: kill -TERM $(pidof haproxy) && haproxy -f /usr/local/etc/haproxy/haproxy.cfg
+      -D
+    reload_strategy: custom
