@@ -1,0 +1,35 @@
+services:
+  haproxy:
+    image: haproxytech/haproxy-alpine:3.0
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8099:8099"  # stats
+      - "5555:5555"  # Data Plane API
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:rw
+      - ./certs:/etc/ssl/certs:ro
+    restart: unless-stopped
+    
+  haproxy-nomad-connector:
+    image: haproxy-nomad-connector:latest
+    depends_on:
+      - haproxy
+    environment:
+      - NOMAD_ADDR=http://nomad.service.consul:4646
+      - NOMAD_TOKEN=${NOMAD_TOKEN}
+      - HAPROXY_DATAPLANE_URL=http://haproxy:5555
+      - HAPROXY_USERNAME=admin
+      - HAPROXY_PASSWORD=${HAPROXY_PASSWORD}
+      - LOG_LEVEL=info
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+# Environment variables to set:
+# export NOMAD_TOKEN=your-nomad-token
+# export HAPROXY_PASSWORD=secure-password-here
