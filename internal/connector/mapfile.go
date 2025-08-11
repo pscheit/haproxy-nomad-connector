@@ -11,6 +11,10 @@ import (
 	"github.com/pscheit/haproxy-nomad-connector/internal/haproxy"
 )
 
+const (
+	DomainMappingMinParts = 2 // domain and backend name
+)
+
 // DomainMapManager manages HAProxy domain-backend map files
 type DomainMapManager struct {
 	filePath string
@@ -52,7 +56,7 @@ func (dmm *DomainMapManager) LoadFromFile() error {
 
 		// Parse line: "domain backend_name"
 		parts := strings.Fields(line)
-		if len(parts) >= 2 {
+		if len(parts) >= DomainMappingMinParts {
 			domain := parts[0]
 			backendName := parts[1]
 

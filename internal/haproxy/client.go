@@ -19,6 +19,12 @@ const (
 	HTTPMethodDELETE = "DELETE"
 )
 
+// Client configuration constants
+const (
+	DefaultClientTimeoutSec  = 10
+	HTTPStatusClientErrorMin = 400
+)
+
 type Client struct {
 	baseURL    string
 	username   string
@@ -33,7 +39,7 @@ func NewClient(baseURL, username, password string) *Client {
 		username: username,
 		password: password,
 		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout: DefaultClientTimeoutSec * time.Second,
 		},
 	}
 }
@@ -152,7 +158,7 @@ func (c *Client) makeRequest(method, path string, body, result interface{}, vers
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode >= HTTPStatusClientErrorMin {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 	}

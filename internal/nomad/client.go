@@ -12,6 +12,11 @@ import (
 	nomadapi "github.com/hashicorp/nomad/api"
 )
 
+// Client configuration constants
+const (
+	StreamReconnectDelaySec = 5
+)
+
 type Client struct {
 	client  *nomadapi.Client
 	address string
@@ -99,7 +104,7 @@ func (c *Client) StreamServiceEvents(ctx context.Context, eventChan chan<- Servi
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
-				case <-time.After(5 * time.Second):
+				case <-time.After(StreamReconnectDelaySec * time.Second):
 					continue
 				}
 			}

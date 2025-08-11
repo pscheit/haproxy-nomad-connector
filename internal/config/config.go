@@ -7,6 +7,11 @@ import (
 	"strconv"
 )
 
+// Default configuration constants
+const (
+	DefaultDrainTimeoutSec = 10
+)
+
 type Config struct {
 	Nomad     NomadConfig     `json:"nomad"`
 	HAProxy   HAProxyConfig   `json:"haproxy"`
@@ -51,7 +56,7 @@ func Load(configFile string) (*Config, error) {
 			Username:        getEnv("HAPROXY_USERNAME", "admin"),
 			Password:        getEnv("HAPROXY_PASSWORD", "adminpwd"),
 			BackendStrategy: getEnv("HAPROXY_BACKEND_STRATEGY", "use_existing"),
-			DrainTimeoutSec: getEnvInt("HAPROXY_DRAIN_TIMEOUT_SEC", 10),
+			DrainTimeoutSec: getEnvInt("HAPROXY_DRAIN_TIMEOUT_SEC", DefaultDrainTimeoutSec),
 		},
 		Log: LogConfig{
 			Level: getEnv("LOG_LEVEL", "info"),

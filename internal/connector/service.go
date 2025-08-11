@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pscheit/haproxy-nomad-connector/internal/config"
 	"github.com/pscheit/haproxy-nomad-connector/internal/haproxy"
 	"github.com/pscheit/haproxy-nomad-connector/internal/nomad"
 )
@@ -109,7 +110,7 @@ func ProcessServiceEventWithHealthCheck(
 	event *ServiceEvent,
 	logger *log.Logger,
 ) (interface{}, error) {
-	return ProcessServiceEventWithHealthCheckAndConfig(ctx, haproxyClient, nomadClient, event, logger, 10)
+	return ProcessServiceEventWithHealthCheckAndConfig(ctx, haproxyClient, nomadClient, event, logger, config.DefaultDrainTimeoutSec)
 }
 
 // ProcessServiceEventWithHealthCheckAndConfig processes a service event with configurable drain timeout
@@ -297,7 +298,7 @@ func handleServiceDeregistrationWithDomainMap(
 	event *ServiceEvent,
 	domainMapManager *DomainMapManager,
 ) (interface{}, error) {
-	return handleServiceDeregistrationWithDrainTimeout(ctx, client, event, domainMapManager, 10, nil)
+	return handleServiceDeregistrationWithDrainTimeout(ctx, client, event, domainMapManager, config.DefaultDrainTimeoutSec, nil)
 }
 
 func handleServiceDeregistrationWithDrainTimeout(

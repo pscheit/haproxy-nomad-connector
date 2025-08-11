@@ -13,6 +13,12 @@ import (
 	"github.com/pscheit/haproxy-nomad-connector/internal/nomad"
 )
 
+// Buffer sizes and timeouts
+const (
+	EventChannelBuffer    = 100
+	HealthCheckTimeoutSec = 10
+)
+
 // Connector manages the integration between Nomad and HAProxy
 type Connector struct {
 	config        *config.Config
@@ -77,7 +83,7 @@ func (c *Connector) Start(ctx context.Context) error {
 	go c.startHealthServer(ctx)
 
 	// Start event processing
-	eventChan := make(chan nomad.ServiceEvent, 100)
+	eventChan := make(chan nomad.ServiceEvent, EventChannelBuffer)
 
 	// Start event stream in background
 	go func() {
@@ -222,7 +228,7 @@ func (c *Connector) startHealthServer(ctx context.Context) {
 	server := &http.Server{
 		Addr:              ":8080",
 		Handler:           mux,
-		ReadHeaderTimeout: 10 * time.Second,
+		ReadHeaderTimeout: HealthCheckTimeoutSec * time.Second,
 	}
 
 	c.logger.Printf("Starting health server on :8080")

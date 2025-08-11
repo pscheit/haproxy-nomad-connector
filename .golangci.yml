@@ -54,14 +54,6 @@ linters-settings:
       - operation
       - return
       - assign
-    ignored-numbers:
-      - '0'
-      - '1' 
-      - '2'
-      - '5'
-      - '10'
-      - '100'
-      - '400'
 
 linters:
   disable-all: true
