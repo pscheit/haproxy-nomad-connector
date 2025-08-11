@@ -113,12 +113,12 @@ func (c *Client) GetRuntimeServer(backendName, serverName string) (*RuntimeServe
 // SetServerState sets the administrative state of a server (ready, drain, maint)
 func (c *Client) SetServerState(backendName, serverName, adminState string) error {
 	path := fmt.Sprintf("/v3/services/haproxy/runtime/backends/%s/servers/%s", backendName, serverName)
-	
+
 	// Create the runtime server object with the new admin state
 	server := RuntimeServer{
 		AdminState: adminState,
 	}
-	
+
 	return c.makeRequest("PUT", path, server, nil, 0)
 }
 

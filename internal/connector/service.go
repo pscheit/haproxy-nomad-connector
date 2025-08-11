@@ -20,7 +20,11 @@ const (
 
 // Status constants
 const (
-	StatusCreated = "created"
+	StatusCreated        = "created"
+	StatusDeleted        = "deleted"
+	StatusDraining       = "draining"
+	MethodGracefulDrain  = "graceful_drain"
+	MethodImmediateDeletion = "immediate_deletion"
 )
 
 // ServiceEvent represents a Nomad service registration/deregistration event
@@ -178,17 +182,6 @@ func processDynamicServiceWithDomainMap(
 	}
 }
 
-// processDynamicServiceWithHealthCheck creates a new backend for the service with health check synchronization
-func processDynamicServiceWithHealthCheck(
-	ctx context.Context,
-	client haproxy.ClientInterface,
-	nomadClient *nomad.Client,
-	event *ServiceEvent,
-	logger *log.Logger,
-) (interface{}, error) {
-	return processDynamicServiceWithHealthCheckAndConfig(ctx, client, nomadClient, event, logger, 10)
-}
-
 // processDynamicServiceWithHealthCheckAndConfig creates a new backend for the service with configurable drain timeout
 func processDynamicServiceWithHealthCheckAndConfig(
 	ctx context.Context,
@@ -332,23 +325,23 @@ func handleServiceDeregistrationWithDrainTimeout(
 		if versionErr != nil {
 			return nil, fmt.Errorf("failed to get config version for fallback deletion: %w", versionErr)
 		}
-		
+
 		err = client.DeleteServer(backendName, serverName, version)
 		if err != nil {
 			return nil, fmt.Errorf("failed to delete server %s from backend %s: %w", serverName, backendName, err)
 		}
-		
-		result["status"] = "deleted"
-		result["method"] = "immediate_deletion"
+
+		result["status"] = StatusDeleted
+		result["method"] = MethodImmediateDeletion
 	} else {
-		result["status"] = "draining"
-		result["method"] = "graceful_drain"
-		
+		result["status"] = StatusDraining
+		result["method"] = MethodGracefulDrain
+
 		// Schedule delayed removal after drain period
 		go func() {
 			drainDuration := time.Duration(drainTimeoutSec) * time.Second
 			time.Sleep(drainDuration)
-			
+
 			version, versionErr := client.GetConfigVersion()
 			if versionErr != nil {
 				if logger != nil {
@@ -356,7 +349,7 @@ func handleServiceDeregistrationWithDrainTimeout(
 				}
 				return
 			}
-			
+
 			deleteErr := client.DeleteServer(backendName, serverName, version)
 			if deleteErr != nil {
 				if logger != nil {
@@ -364,7 +357,8 @@ func handleServiceDeregistrationWithDrainTimeout(
 				}
 			} else {
 				if logger != nil {
-					logger.Printf("Successfully completed graceful removal of server %s from backend %s after %ds drain", serverName, backendName, drainTimeoutSec)
+					logger.Printf("Gracefully removed server %s from backend %s after %ds drain",
+						serverName, backendName, drainTimeoutSec)
 				}
 			}
 		}()

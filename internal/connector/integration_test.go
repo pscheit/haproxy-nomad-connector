@@ -257,12 +257,12 @@ func TestServiceDeregistrationWithDomainMapping(t *testing.T) {
 	}
 
 	// With the new drain functionality, status should be "draining" instead of "deleted"
-	if resultMap["status"] != "draining" {
-		t.Errorf("Expected status 'draining', got %s", resultMap["status"])
+	if resultMap["status"] != StatusDraining {
+		t.Errorf("Expected status '%s', got %s", StatusDraining, resultMap["status"])
 	}
 
-	if resultMap["method"] != "graceful_drain" {
-		t.Errorf("Expected method 'graceful_drain', got %s", resultMap["method"])
+	if resultMap["method"] != MethodGracefulDrain {
+		t.Errorf("Expected method '%s', got %s", MethodGracefulDrain, resultMap["method"])
 	}
 
 	// Server should still be present immediately after drain (will be removed after timeout)

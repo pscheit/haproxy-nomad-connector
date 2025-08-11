@@ -197,12 +197,12 @@ func TestHandleServiceDeregistrationWithDrainTimeout_DrainSuccess(t *testing.T) 
 		t.Fatal("Expected result to be map[string]string")
 	}
 
-	if resultMap["status"] != "draining" {
-		t.Errorf("Expected status 'draining', got %s", resultMap["status"])
+	if resultMap["status"] != StatusDraining {
+		t.Errorf("Expected status '%s', got %s", StatusDraining, resultMap["status"])
 	}
 
-	if resultMap["method"] != "graceful_drain" {
-		t.Errorf("Expected method 'graceful_drain', got %s", resultMap["method"])
+	if resultMap["method"] != MethodGracefulDrain {
+		t.Errorf("Expected method '%s', got %s", MethodGracefulDrain, resultMap["method"])
 	}
 
 	// Wait for delayed deletion to occur
@@ -255,11 +255,11 @@ func TestHandleServiceDeregistrationWithDrainTimeout_DrainFails(t *testing.T) {
 		t.Fatal("Expected result to be map[string]string")
 	}
 
-	if resultMap["status"] != "deleted" {
-		t.Errorf("Expected status 'deleted', got %s", resultMap["status"])
+	if resultMap["status"] != StatusDeleted {
+		t.Errorf("Expected status '%s', got %s", StatusDeleted, resultMap["status"])
 	}
 
-	if resultMap["method"] != "immediate_deletion" {
-		t.Errorf("Expected method 'immediate_deletion', got %s", resultMap["method"])
+	if resultMap["method"] != MethodImmediateDeletion {
+		t.Errorf("Expected method '%s', got %s", MethodImmediateDeletion, resultMap["method"])
 	}
 }

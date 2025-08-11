@@ -118,7 +118,7 @@ type ClientInterface interface {
 	GetServers(backendName string) ([]Server, error)
 	CreateServer(backendName string, server *Server, version int) (*Server, error)
 	DeleteServer(backendName, serverName string, version int) error
-	
+
 	// Runtime server management
 	GetRuntimeServer(backendName, serverName string) (*RuntimeServer, error)
 	SetServerState(backendName, serverName, adminState string) error

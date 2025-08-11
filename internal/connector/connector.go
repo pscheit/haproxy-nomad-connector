@@ -123,10 +123,10 @@ func (c *Connector) processNomadServiceEventWithConfig(ctx context.Context, even
 		event.Type, svc.ServiceName, svc.Address, svc.Port)
 
 	return ProcessServiceEventWithHealthCheckAndConfig(
-		ctx, 
-		c.haproxyClient, 
-		c.nomadClient, 
-		&serviceEvent, 
+		ctx,
+		c.haproxyClient,
+		c.nomadClient,
+		&serviceEvent,
 		c.logger,
 		c.config.HAProxy.DrainTimeoutSec,
 	)
