@@ -10,6 +10,18 @@ import (
 	"github.com/pscheit/haproxy-nomad-connector/internal/nomad"
 )
 
+// Health check type constants
+const (
+	CheckTypeHTTP     = "http"
+	CheckTypeTCP      = "tcp"
+	CheckTypeDisabled = "disabled"
+)
+
+// Status constants  
+const (
+	StatusCreated = "created"
+)
+
 // ServiceEvent represents a Nomad service registration/deregistration event
 type ServiceEvent struct {
 	Type    string
@@ -366,7 +378,7 @@ func handleServiceRegistrationWithHealthCheck(ctx context.Context, client haprox
 	}
 	
 	return map[string]string{
-		"status":     "created",
+		"status":     StatusCreated,
 		"backend":    backendName,
 		"server":     serverName,
 		"check_type": server.CheckType,
@@ -398,7 +410,7 @@ func createServerWithHealthCheck(service Service, serverName string, nomadCheck 
 	}
 
 	// Default: basic TCP check
-	server.CheckType = "tcp"
+	server.CheckType = CheckTypeTCP
 	logger.Printf("Using default TCP health check for server %s", serverName)
 	
 	return server
@@ -433,13 +445,13 @@ func parseHealthCheckFromTags(tags []string) *HealthCheckConfig {
 	
 	// If disabled, return special config
 	if config.Disabled {
-		config.Type = "disabled"
+		config.Type = CheckTypeDisabled
 	} else if config.Type == "" {
 		// If path is specified but no type, assume HTTP
 		if config.Path != "" {
-			config.Type = "http"
+			config.Type = CheckTypeHTTP
 		} else {
-			config.Type = "tcp"
+			config.Type = CheckTypeTCP
 		}
 	}
 
@@ -466,16 +478,16 @@ func convertNomadToHAProxyCheck(nomadCheck *nomad.ServiceCheck) *HealthCheckConf
 	// Map Nomad check types to HAProxy equivalents
 	switch nomadCheck.Type {
 	case "http", "https":
-		config.Type = "http"
+		config.Type = CheckTypeHTTP
 		if config.Method == "" {
 			config.Method = "GET"
 		}
 	case "tcp":
-		config.Type = "tcp"
+		config.Type = CheckTypeTCP
 	case "grpc":
-		config.Type = "tcp" // HAProxy doesn't have native gRPC checks, use TCP
+		config.Type = CheckTypeTCP // HAProxy doesn't have native gRPC checks, use TCP
 	default:
-		config.Type = "tcp" // Default fallback
+		config.Type = CheckTypeTCP // Default fallback
 	}
 
 	return config
@@ -484,15 +496,15 @@ func convertNomadToHAProxyCheck(nomadCheck *nomad.ServiceCheck) *HealthCheckConf
 // applyHealthCheckToServer applies health check configuration to HAProxy server
 func applyHealthCheckToServer(server *haproxy.Server, config *HealthCheckConfig, source string, logger *log.Logger) {
 	if config.Disabled {
-		server.Check = "disabled"
-		server.CheckType = "disabled"
+		server.Check = CheckTypeDisabled
+		server.CheckType = CheckTypeDisabled
 		logger.Printf("Disabled health checks for server %s (source: %s)", server.Name, source)
 		return
 	}
 
 	switch config.Type {
-	case "http":
-		server.CheckType = "http"
+	case CheckTypeHTTP:
+		server.CheckType = CheckTypeHTTP
 		server.CheckPath = config.Path
 		server.CheckMethod = config.Method
 		if config.Host != "" {
@@ -500,11 +512,11 @@ func applyHealthCheckToServer(server *haproxy.Server, config *HealthCheckConfig,
 		}
 		logger.Printf("Configured HTTP health check for server %s: %s %s (source: %s)", 
 			server.Name, config.Method, config.Path, source)
-	case "tcp":
-		server.CheckType = "tcp"
+	case CheckTypeTCP:
+		server.CheckType = CheckTypeTCP
 		logger.Printf("Configured TCP health check for server %s (source: %s)", server.Name, source)
 	default:
-		server.CheckType = "tcp"
+		server.CheckType = CheckTypeTCP
 		logger.Printf("Using TCP fallback health check for server %s (source: %s)", server.Name, source)
 	}
 }

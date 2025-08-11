@@ -122,7 +122,7 @@ func (c *Connector) syncExistingServices(ctx context.Context) error {
 		if result, err := ProcessNomadServiceEvent(ctx, c.haproxyClient, c.nomadClient, event, c.logger); err != nil {
 			c.logger.Printf("Failed to sync service %s: %v", svc.ServiceName, err)
 		} else {
-			if resultMap, ok := result.(map[string]string); ok && resultMap["status"] == "created" {
+			if resultMap, ok := result.(map[string]string); ok && resultMap["status"] == StatusCreated {
 				synced++
 			}
 		}
@@ -187,15 +187,18 @@ func (c *Connector) startHealthServer(ctx context.Context) {
 	})
 
 	server := &http.Server{
-		Addr:    ":8080",
-		Handler: mux,
+		Addr:              ":8080",
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	c.logger.Printf("Starting health server on :8080")
 	
 	go func() {
 		<-ctx.Done()
-		server.Shutdown(context.Background())
+		if err := server.Shutdown(context.Background()); err != nil {
+			c.logger.Printf("Error shutting down HTTP server: %v", err)
+		}
 	}()
 	
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {

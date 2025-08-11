@@ -34,7 +34,7 @@ func TestClient_CreateBackend(t *testing.T) {
 		// Return success response
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(backend)
+		_ = json.NewEncoder(w).Encode(backend)
 	}))
 	defer server.Close()
 
@@ -72,7 +72,7 @@ func TestClient_GetBackends(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(backends)
+		_ = json.NewEncoder(w).Encode(backends)
 	}))
 	defer server.Close()
 
@@ -102,13 +102,13 @@ func TestClient_CreateServer(t *testing.T) {
 
 		// Verify server data
 		var server Server
-		json.NewDecoder(r.Body).Decode(&server)
+		_ = json.NewDecoder(r.Body).Decode(&server)
 		if server.Name != "server1" {
 			t.Errorf("Expected 'server1', got %s", server.Name)
 		}
 
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(server)
+		_ = json.NewEncoder(w).Encode(server)
 	}))
 	defer server.Close()
 
