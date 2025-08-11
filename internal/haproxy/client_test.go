@@ -121,7 +121,7 @@ func TestClient_CreateServer(t *testing.T) {
 		Check:   "enabled",
 	}
 
-	_, err := client.CreateServer("test-backend", testServer, 2)
+	_, err := client.CreateServer("test-backend", &testServer, 2)
 	if err != nil {
 		t.Fatalf("Failed to create server: %v", err)
 	}

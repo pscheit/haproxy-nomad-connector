@@ -37,12 +37,17 @@ type Service struct {
 }
 
 // ProcessServiceEvent processes a Nomad service event and updates HAProxy
-func ProcessServiceEvent(ctx context.Context, client haproxy.ClientInterface, event ServiceEvent) (interface{}, error) {
+func ProcessServiceEvent(ctx context.Context, client haproxy.ClientInterface, event *ServiceEvent) (interface{}, error) {
 	return ProcessServiceEventWithDomainMap(ctx, client, &event, nil)
 }
 
 // ProcessServiceEventWithDomainMap processes a Nomad service event and updates HAProxy and domain mapping
-func ProcessServiceEventWithDomainMap(ctx context.Context, client haproxy.ClientInterface, event *ServiceEvent, domainMapManager *DomainMapManager) (interface{}, error) {
+func ProcessServiceEventWithDomainMap(
+	ctx context.Context,
+	client haproxy.ClientInterface,
+	event *ServiceEvent,
+	domainMapManager *DomainMapManager,
+) (interface{}, error) {
 	// Classify service based on tags
 	serviceType := classifyService(event.Service.Tags)
 
@@ -92,7 +97,13 @@ func ProcessNomadServiceEvent(
 }
 
 // ProcessServiceEventWithHealthCheck processes a service event with health check synchronization from Nomad
-func ProcessServiceEventWithHealthCheck(ctx context.Context, haproxyClient haproxy.ClientInterface, nomadClient *nomad.Client, event ServiceEvent, logger *log.Logger) (interface{}, error) {
+func ProcessServiceEventWithHealthCheck(
+	ctx context.Context,
+	haproxyClient haproxy.ClientInterface,
+	nomadClient *nomad.Client,
+	event *ServiceEvent,
+	logger *log.Logger,
+) (interface{}, error) {
 	// Classify service based on tags
 	serviceType := classifyService(event.Service.Tags)
 
@@ -101,7 +112,7 @@ func ProcessServiceEventWithHealthCheck(ctx context.Context, haproxyClient hapro
 		return processDynamicServiceWithHealthCheck(ctx, haproxyClient, nomadClient, &event, logger)
 	case haproxy.ServiceTypeCustom:
 		// TODO: Implement custom service with health check
-		return ProcessServiceEvent(ctx, haproxyClient, event)
+		return ProcessServiceEvent(ctx, haproxyClient, &event)
 	case haproxy.ServiceTypeStatic:
 		return map[string]string{"status": "ignored", "reason": "static service"}, nil
 	default:
@@ -137,9 +148,13 @@ func classifyService(tags []string) haproxy.ServiceType {
 	}
 }
 
-
 // processDynamicServiceWithDomainMap creates a new backend for the service and updates domain mapping
-func processDynamicServiceWithDomainMap(ctx context.Context, client haproxy.ClientInterface, event *ServiceEvent, domainMapManager *DomainMapManager) (interface{}, error) {
+func processDynamicServiceWithDomainMap(
+	ctx context.Context,
+	client haproxy.ClientInterface,
+	event *ServiceEvent,
+	domainMapManager *DomainMapManager,
+) (interface{}, error) {
 	switch event.Type {
 	case "ServiceRegistration":
 		return handleServiceRegistrationWithDomainMap(ctx, client, event, domainMapManager)
@@ -151,7 +166,13 @@ func processDynamicServiceWithDomainMap(ctx context.Context, client haproxy.Clie
 }
 
 // processDynamicServiceWithHealthCheck creates a new backend for the service with health check synchronization
-func processDynamicServiceWithHealthCheck(ctx context.Context, client haproxy.ClientInterface, nomadClient *nomad.Client, event *ServiceEvent, logger *log.Logger) (interface{}, error) {
+func processDynamicServiceWithHealthCheck(
+	ctx context.Context,
+	client haproxy.ClientInterface,
+	nomadClient *nomad.Client,
+	event *ServiceEvent,
+	logger *log.Logger,
+) (interface{}, error) {
 	switch event.Type {
 	case "ServiceRegistration":
 		return handleServiceRegistrationWithHealthCheck(ctx, client, nomadClient, event, logger)
@@ -162,8 +183,12 @@ func processDynamicServiceWithHealthCheck(ctx context.Context, client haproxy.Cl
 	}
 }
 
-
-func handleServiceRegistrationWithDomainMap(ctx context.Context, client haproxy.ClientInterface, event *ServiceEvent, domainMapManager *DomainMapManager) (interface{}, error) {
+func handleServiceRegistrationWithDomainMap(
+	ctx context.Context,
+	client haproxy.ClientInterface,
+	event *ServiceEvent,
+	domainMapManager *DomainMapManager,
+) (interface{}, error) {
 	version, err := client.GetConfigVersion()
 	if err != nil {
 		return nil, err
@@ -220,7 +245,7 @@ func handleServiceRegistrationWithDomainMap(ctx context.Context, client haproxy.
 		Check:   "enabled", // Default - will be updated by health check logic
 	}
 
-	_, err = client.CreateServer(backendName, server, version)
+	_, err = client.CreateServer(backendName, &server, version)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create server %s in backend %s: %w", serverName, backendName, err)
 	}
@@ -248,8 +273,12 @@ func handleServiceRegistrationWithDomainMap(ctx context.Context, client haproxy.
 	return result, nil
 }
 
-
-func handleServiceDeregistrationWithDomainMap(ctx context.Context, client haproxy.ClientInterface, event *ServiceEvent, domainMapManager *DomainMapManager) (interface{}, error) {
+func handleServiceDeregistrationWithDomainMap(
+	ctx context.Context,
+	client haproxy.ClientInterface,
+	event *ServiceEvent,
+	domainMapManager *DomainMapManager,
+) (interface{}, error) {
 	// Get current config version
 	version, err := client.GetConfigVersion()
 	if err != nil {
@@ -292,15 +321,25 @@ func handleServiceDeregistrationWithDomainMap(ctx context.Context, client haprox
 	return result, nil
 }
 
-
 // processCustomServiceWithDomainMap adds servers to existing backends and updates domain mapping
-func processCustomServiceWithDomainMap(ctx context.Context, client haproxy.ClientInterface, event *ServiceEvent, domainMapManager *DomainMapManager) (interface{}, error) {
+func processCustomServiceWithDomainMap(
+	ctx context.Context,
+	client haproxy.ClientInterface,
+	event *ServiceEvent,
+	domainMapManager *DomainMapManager,
+) (interface{}, error) {
 	// TODO: Implement custom backend server management with domain mapping
 	return map[string]string{"status": "todo", "reason": "custom backend not implemented"}, nil
 }
 
 // handleServiceRegistrationWithHealthCheck handles service registration with health check synchronization
-func handleServiceRegistrationWithHealthCheck(ctx context.Context, client haproxy.ClientInterface, nomadClient *nomad.Client, event *ServiceEvent, logger *log.Logger) (interface{}, error) {
+func handleServiceRegistrationWithHealthCheck(
+	ctx context.Context,
+	client haproxy.ClientInterface,
+	nomadClient *nomad.Client,
+	event *ServiceEvent,
+	logger *log.Logger,
+) (interface{}, error) {
 	version, err := client.GetConfigVersion()
 	if err != nil {
 		return nil, err
@@ -364,7 +403,7 @@ func handleServiceRegistrationWithHealthCheck(ctx context.Context, client haprox
 	// Create server with health check configuration
 	server := createServerWithHealthCheck(&event.Service, serverName, serviceCheck, event.Service.Tags, logger)
 
-	_, err = client.CreateServer(backendName, server, version)
+	_, err = client.CreateServer(backendName, &server, version)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create server %s in backend %s: %w", serverName, backendName, err)
 	}
@@ -378,7 +417,13 @@ func handleServiceRegistrationWithHealthCheck(ctx context.Context, client haprox
 }
 
 // createServerWithHealthCheck creates a server with appropriate health check configuration
-func createServerWithHealthCheck(service *Service, serverName string, nomadCheck *nomad.ServiceCheck, tags []string, logger *log.Logger) haproxy.Server {
+func createServerWithHealthCheck(
+	service *Service,
+	serverName string,
+	nomadCheck *nomad.ServiceCheck,
+	tags []string,
+	logger *log.Logger,
+) haproxy.Server {
 	server := haproxy.Server{
 		Name:    serverName,
 		Address: service.Address,

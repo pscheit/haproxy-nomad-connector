@@ -128,7 +128,7 @@ func TestE2E_ServiceLifecycle(t *testing.T) {
 		}
 
 		// Process event through connector
-		result, err := connector.ProcessServiceEvent(ctx, client, serviceEvent)
+		result, err := connector.ProcessServiceEvent(ctx, client, &serviceEvent)
 		if err != nil {
 			t.Fatalf("Failed to process service event: %v", err)
 		}

@@ -51,13 +51,13 @@ func (m *MockHAProxyClient) GetServers(backendName string) ([]haproxy.Server, er
 	return servers, nil
 }
 
-func (m *MockHAProxyClient) CreateServer(backendName string, server haproxy.Server, version int) (*haproxy.Server, error) {
+func (m *MockHAProxyClient) CreateServer(backendName string, server *haproxy.Server, version int) (*haproxy.Server, error) {
 	if _, exists := m.servers[backendName]; !exists {
 		m.servers[backendName] = []haproxy.Server{}
 	}
-	m.servers[backendName] = append(m.servers[backendName], server)
+	m.servers[backendName] = append(m.servers[backendName], *server)
 	m.version++
-	return &server, nil
+	return server, nil
 }
 
 func (m *MockHAProxyClient) DeleteServer(backendName, serverName string, version int) error {

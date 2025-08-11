@@ -2,6 +2,7 @@ package haproxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -88,7 +89,7 @@ func (c *Client) DeleteBackend(name string, version int) error {
 }
 
 // CreateServer adds a server to a backend
-func (c *Client) CreateServer(backendName string, server Server, version int) (*Server, error) {
+func (c *Client) CreateServer(backendName string, server *Server, version int) (*Server, error) {
 	var created Server
 	path := fmt.Sprintf("/v3/services/haproxy/configuration/backends/%s/servers", backendName)
 	err := c.makeRequest("POST", path, server, &created, version)
@@ -145,7 +146,7 @@ func (c *Client) makeRawRequest(method, path string, body interface{}, version i
 		bodyReader = bytes.NewReader(jsonBody)
 	}
 
-	req, err := http.NewRequest(method, url, bodyReader)
+	req, err := http.NewRequestWithContext(context.Background(), method, url, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

@@ -111,7 +111,7 @@ func (c *Client) streamEvents(ctx context.Context, eventChan chan<- ServiceEvent
 	// Create HTTP request for event stream
 	url := fmt.Sprintf("%s/v1/event/stream?topic=Service", c.address)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, http.NoBody)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
