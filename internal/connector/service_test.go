@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -106,6 +107,7 @@ func TestGenerateServerName(t *testing.T) {
 
 // mockHAProxyClient implements haproxy.ClientInterface for testing
 type mockHAProxyClient struct {
+	mu                sync.Mutex
 	drainCalled       bool
 	deleteCalled      bool
 	drainError        error
@@ -136,6 +138,8 @@ func (m *mockHAProxyClient) CreateServer(backendName string, server *haproxy.Ser
 }
 
 func (m *mockHAProxyClient) DeleteServer(backendName, serverName string, version int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.deleteCalled = true
 	return m.deleteError
 }
@@ -149,6 +153,8 @@ func (m *mockHAProxyClient) SetServerState(backendName, serverName, adminState s
 }
 
 func (m *mockHAProxyClient) DrainServer(backendName, serverName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.drainCalled = true
 	return m.drainError
 }
@@ -159,6 +165,19 @@ func (m *mockHAProxyClient) ReadyServer(backendName, serverName string) error {
 
 func (m *mockHAProxyClient) MaintainServer(backendName, serverName string) error {
 	return nil
+}
+
+// Helper methods for thread-safe access to test state
+func (m *mockHAProxyClient) wasDrainCalled() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.drainCalled
+}
+
+func (m *mockHAProxyClient) wasDeleteCalled() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.deleteCalled
 }
 
 func TestHandleServiceDeregistrationWithDrainTimeout_DrainSuccess(t *testing.T) {
@@ -188,7 +207,7 @@ func TestHandleServiceDeregistrationWithDrainTimeout_DrainSuccess(t *testing.T) 
 		t.Fatalf("Expected no error, got: %v", err)
 	}
 
-	if !mockClient.drainCalled {
+	if !mockClient.wasDrainCalled() {
 		t.Error("Expected DrainServer to be called")
 	}
 
@@ -208,7 +227,7 @@ func TestHandleServiceDeregistrationWithDrainTimeout_DrainSuccess(t *testing.T) 
 	// Wait for delayed deletion to occur
 	time.Sleep(3 * time.Second)
 
-	if !mockClient.deleteCalled {
+	if !mockClient.wasDeleteCalled() {
 		t.Error("Expected DeleteServer to be called after drain timeout")
 	}
 }
@@ -242,11 +261,11 @@ func TestHandleServiceDeregistrationWithDrainTimeout_DrainFails(t *testing.T) {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
 
-	if !mockClient.drainCalled {
+	if !mockClient.wasDrainCalled() {
 		t.Error("Expected DrainServer to be called")
 	}
 
-	if !mockClient.deleteCalled {
+	if !mockClient.wasDeleteCalled() {
 		t.Error("Expected DeleteServer to be called as fallback")
 	}
 
