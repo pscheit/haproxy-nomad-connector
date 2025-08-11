@@ -5,7 +5,8 @@ run:
 
 linters-settings:
   govet:
-    check-shadowing: true
+    enable:
+      - shadow
   golint:
     min-confidence: 0
   gocyclo:
@@ -45,16 +46,31 @@ linters-settings:
       - prefix(github.com/pscheit/haproxy-nomad-connector)
     section-separators:
       - newLine
+  mnd:
+    checks:
+      - argument
+      - case
+      - condition
+      - operation
+      - return
+      - assign
+    ignored-numbers:
+      - '0'
+      - '1' 
+      - '2'
+      - '5'
+      - '10'
+      - '100'
+      - '400'
 
 linters:
   disable-all: true
   enable:
     - bodyclose
-    - deadcode
+    - copyloopvar    # replaces exportloopref
     - dogsled
     - dupl
     - errcheck
-    - exportloopref
     - exhaustive
     - funlen
     - gochecknoinits
@@ -63,7 +79,7 @@ linters:
     - gocyclo
     - gofmt
     - goimports
-    - gomnd
+    - mnd            # replaces gomnd
     - goprintffuncname
     - gosec
     - gosimple
@@ -76,13 +92,11 @@ linters:
     - nolintlint
     - rowserrcheck
     - staticcheck
-    - structcheck
     - stylecheck
     - typecheck
     - unconvert
     - unparam
-    - unused
-    - varcheck
+    - unused         # replaces deadcode, structcheck, varcheck
     - whitespace
 
 issues:
@@ -90,12 +104,12 @@ issues:
   exclude-rules:
     - path: _test\.go
       linters:
-        - gomnd
+        - mnd
         - funlen
         - gocyclo
     - path: cmd/
       linters:
-        - gomnd
+        - mnd
     - linters:
         - lll
       source: "^//go:generate "
