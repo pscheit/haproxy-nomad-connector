@@ -20,10 +20,10 @@ const (
 
 // Status constants
 const (
-	StatusCreated        = "created"
-	StatusDeleted        = "deleted"
-	StatusDraining       = "draining"
-	MethodGracefulDrain  = "graceful_drain"
+	StatusCreated           = "created"
+	StatusDeleted           = "deleted"
+	StatusDraining          = "draining"
+	MethodGracefulDrain     = "graceful_drain"
 	MethodImmediateDeletion = "immediate_deletion"
 )
 
@@ -202,7 +202,7 @@ func processDynamicServiceWithHealthCheckAndConfig(
 }
 
 func handleServiceRegistrationWithDomainMap(
-	ctx context.Context,
+	_ context.Context,
 	client haproxy.ClientInterface,
 	event *ServiceEvent,
 	domainMapManager *DomainMapManager,
@@ -301,7 +301,7 @@ func handleServiceDeregistrationWithDomainMap(
 }
 
 func handleServiceDeregistrationWithDrainTimeout(
-	ctx context.Context,
+	_ context.Context,
 	client haproxy.ClientInterface,
 	event *ServiceEvent,
 	domainMapManager *DomainMapManager,
@@ -387,10 +387,10 @@ func handleServiceDeregistrationWithDrainTimeout(
 
 // processCustomServiceWithDomainMap adds servers to existing backends and updates domain mapping
 func processCustomServiceWithDomainMap(
-	ctx context.Context,
-	client haproxy.ClientInterface,
-	event *ServiceEvent,
-	domainMapManager *DomainMapManager,
+	_ context.Context,
+	_ haproxy.ClientInterface,
+	_ *ServiceEvent,
+	_ *DomainMapManager,
 ) (interface{}, error) {
 	// TODO: Implement custom backend server management with domain mapping
 	return map[string]string{"status": "todo", "reason": "custom backend not implemented"}, nil
@@ -398,7 +398,7 @@ func processCustomServiceWithDomainMap(
 
 // handleServiceRegistrationWithHealthCheck handles service registration with health check synchronization
 func handleServiceRegistrationWithHealthCheck(
-	ctx context.Context,
+	_ context.Context,
 	client haproxy.ClientInterface,
 	nomadClient *nomad.Client,
 	event *ServiceEvent,

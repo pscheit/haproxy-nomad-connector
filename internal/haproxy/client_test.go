@@ -129,8 +129,8 @@ func TestClient_CreateServer(t *testing.T) {
 
 func TestClient_DrainServer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "PUT" {
-			t.Errorf("Expected PUT, got %s", r.Method)
+		if r.Method != HTTPMethodPUT {
+			t.Errorf("Expected %s, got %s", HTTPMethodPUT, r.Method)
 		}
 		if !strings.Contains(r.URL.Path, "/runtime/backends/test-backend/servers/server1") {
 			t.Errorf("Expected runtime server path, got %s", r.URL.Path)
@@ -157,43 +157,30 @@ func TestClient_DrainServer(t *testing.T) {
 }
 
 func TestClient_ReadyServer(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "PUT" {
-			t.Errorf("Expected PUT, got %s", r.Method)
-		}
-
-		var runtimeServer RuntimeServer
-		if err := json.NewDecoder(r.Body).Decode(&runtimeServer); err != nil {
-			t.Errorf("Failed to decode request body: %v", err)
-		}
-		if runtimeServer.AdminState != "ready" {
-			t.Errorf("Expected admin_state 'ready', got %s", runtimeServer.AdminState)
-		}
-
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	client := NewClient(server.URL, "admin", "password")
-
-	err := client.ReadyServer("test-backend", "server1")
-	if err != nil {
-		t.Fatalf("Failed to ready server: %v", err)
-	}
+	testServerStateChange(t, "ready", func(client *Client) error {
+		return client.ReadyServer("test-backend", "server1")
+	})
 }
 
 func TestClient_MaintainServer(t *testing.T) {
+	testServerStateChange(t, "maint", func(client *Client) error {
+		return client.MaintainServer("test-backend", "server1")
+	})
+}
+
+// Helper function to test server state changes
+func testServerStateChange(t *testing.T, expectedState string, operation func(*Client) error) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "PUT" {
-			t.Errorf("Expected PUT, got %s", r.Method)
+		if r.Method != HTTPMethodPUT {
+			t.Errorf("Expected %s, got %s", HTTPMethodPUT, r.Method)
 		}
 
 		var runtimeServer RuntimeServer
 		if err := json.NewDecoder(r.Body).Decode(&runtimeServer); err != nil {
 			t.Errorf("Failed to decode request body: %v", err)
 		}
-		if runtimeServer.AdminState != "maint" {
-			t.Errorf("Expected admin_state 'maint', got %s", runtimeServer.AdminState)
+		if runtimeServer.AdminState != expectedState {
+			t.Errorf("Expected admin_state '%s', got %s", expectedState, runtimeServer.AdminState)
 		}
 
 		w.WriteHeader(http.StatusOK)
@@ -202,9 +189,9 @@ func TestClient_MaintainServer(t *testing.T) {
 
 	client := NewClient(server.URL, "admin", "password")
 
-	err := client.MaintainServer("test-backend", "server1")
+	err := operation(client)
 	if err != nil {
-		t.Fatalf("Failed to maintain server: %v", err)
+		t.Fatalf("Server state change operation failed: %v", err)
 	}
 }
 

@@ -4,8 +4,9 @@ import (
 	"log"
 	"testing"
 
-	"github.com/pscheit/haproxy-nomad-connector/internal/nomad"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/pscheit/haproxy-nomad-connector/internal/nomad"
 )
 
 func TestParseHealthCheckFromTags(t *testing.T) {

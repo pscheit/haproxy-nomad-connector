@@ -1,7 +1,6 @@
 package nomad
 
 import (
-	"fmt"
 	"testing"
 	"time"
 
@@ -230,53 +229,6 @@ func TestGetServiceCheckFromJob(t *testing.T) {
 			}
 		})
 	}
-}
-
-// Helper function to extract service check from job (testable version)
-func extractServiceCheckFromJob(job *nomadapi.Job, serviceName string) (*ServiceCheck, error) {
-	// Search through all task groups
-	for _, taskGroup := range job.TaskGroups {
-		// Search through all tasks
-		for _, task := range taskGroup.Tasks {
-			// Search through all services
-			for _, service := range task.Services {
-				if service.Name == serviceName {
-					// If there are checks defined, use the first one
-					if len(service.Checks) > 0 {
-						check := service.Checks[0]
-						return &ServiceCheck{
-							Type:     check.Type,
-							Path:     check.Path,
-							Method:   check.Method,
-							Interval: check.Interval,
-							Timeout:  check.Timeout,
-						}, nil
-					}
-					// Service found but no checks defined
-					return nil, nil
-				}
-			}
-		}
-
-		// Also check services defined at task group level
-		for _, service := range taskGroup.Services {
-			if service.Name == serviceName {
-				if len(service.Checks) > 0 {
-					check := service.Checks[0]
-					return &ServiceCheck{
-						Type:     check.Type,
-						Path:     check.Path,
-						Method:   check.Method,
-						Interval: check.Interval,
-						Timeout:  check.Timeout,
-					}, nil
-				}
-				return nil, nil
-			}
-		}
-	}
-
-	return nil, fmt.Errorf("service %s not found in job", serviceName)
 }
 
 func stringPtr(s string) *string {

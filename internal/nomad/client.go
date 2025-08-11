@@ -201,6 +201,11 @@ func (c *Client) GetServiceCheckFromJob(jobID, serviceName string) (*ServiceChec
 		return nil, err
 	}
 
+	return extractServiceCheckFromJob(job, serviceName)
+}
+
+// extractServiceCheckFromJob is a helper function to extract service check from job spec
+func extractServiceCheckFromJob(job *nomadapi.Job, serviceName string) (*ServiceCheck, error) {
 	// Search through all task groups
 	for _, taskGroup := range job.TaskGroups {
 		// Search through all tasks
@@ -243,5 +248,5 @@ func (c *Client) GetServiceCheckFromJob(jobID, serviceName string) (*ServiceChec
 		}
 	}
 
-	return nil, fmt.Errorf("service %s not found in job %s", serviceName, jobID)
+	return nil, fmt.Errorf("service %s not found in job", serviceName)
 }
