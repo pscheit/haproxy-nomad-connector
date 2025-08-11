@@ -114,14 +114,14 @@ func TestClient_CreateServer(t *testing.T) {
 
 	client := NewClient(server.URL, "admin", "password")
 
-	server := Server{
+	testServer := Server{
 		Name:    "server1",
 		Address: "192.168.1.10",
 		Port:    8080,
 		Check:   "enabled",
 	}
 
-	_, err := client.CreateServer("test-backend", server, 2)
+	_, err := client.CreateServer("test-backend", testServer, 2)
 	if err != nil {
 		t.Fatalf("Failed to create server: %v", err)
 	}

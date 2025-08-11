@@ -1,0 +1,37 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+docs/
+
+# Development files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test files
+*_test.go
+coverage.out
+coverage.html
+
+# Build artifacts
+build/
+haproxy-nomad-connector
+*.exe
+
+# Development configs
+dev/
+examples/
+docker-compose*.yml
+
+# CI/CD
+.github/
+.golangci.yml
+Makefile
+
+# Other
+.DS_Store
+Thumbs.db
