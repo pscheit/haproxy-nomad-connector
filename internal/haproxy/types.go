@@ -33,9 +33,9 @@ type Server struct {
 }
 
 type Frontend struct {
-	Name         string `json:"name"`
+	Name           string `json:"name"`
 	DefaultBackend string `json:"default_backend,omitempty"`
-	From         string `json:"from,omitempty"`
+	From           string `json:"from,omitempty"`
 }
 
 // Service classification for our connector
@@ -65,16 +65,16 @@ type HealthCheck struct {
 type BackendStrategy string
 
 const (
-	BackendStrategyCreateNew       BackendStrategy = "create_new"
-	BackendStrategyUseExisting     BackendStrategy = "use_existing"
-	BackendStrategyFailOnConflict  BackendStrategy = "fail_on_conflict"
+	BackendStrategyCreateNew      BackendStrategy = "create_new"
+	BackendStrategyUseExisting    BackendStrategy = "use_existing"
+	BackendStrategyFailOnConflict BackendStrategy = "fail_on_conflict"
 )
 
 // Domain mapping types
 type DomainMapping struct {
-	Domain      string      `json:"domain"`
-	BackendName string      `json:"backend_name"`
-	Type        DomainType  `json:"type"`
+	Domain      string     `json:"domain"`
+	BackendName string     `json:"backend_name"`
+	Type        DomainType `json:"type"`
 }
 
 type DomainType string

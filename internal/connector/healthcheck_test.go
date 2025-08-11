@@ -162,7 +162,7 @@ func TestConvertNomadToHAProxyCheck(t *testing.T) {
 
 func TestCreateServerWithHealthCheck(t *testing.T) {
 	logger := log.New(&testWriter{}, "", 0)
-	
+
 	tests := []struct {
 		name       string
 		service    Service
@@ -224,13 +224,13 @@ func TestCreateServerWithHealthCheck(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := createServerWithHealthCheck(tt.service, tt.serverName, tt.nomadCheck, tt.tags, logger)
-			
+			server := createServerWithHealthCheck(&tt.service, tt.serverName, tt.nomadCheck, tt.tags, logger)
+
 			assert.Equal(t, tt.serverName, server.Name)
 			assert.Equal(t, tt.service.Address, server.Address)
 			assert.Equal(t, tt.service.Port, server.Port)
 			assert.Equal(t, tt.expected, server.CheckType)
-			
+
 			if tt.expected != "disabled" {
 				assert.Equal(t, "enabled", server.Check)
 			} else {

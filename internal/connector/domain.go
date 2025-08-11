@@ -21,7 +21,7 @@ func parseDomainMapping(serviceName string, tags []string) *haproxy.DomainMappin
 			case "exact":
 				domainType = haproxy.DomainTypeExact
 			case "prefix":
-				domainType = haproxy.DomainTypePrefix  
+				domainType = haproxy.DomainTypePrefix
 			case "regex":
 				domainType = haproxy.DomainTypeRegex
 			}

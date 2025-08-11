@@ -102,7 +102,7 @@ func (c *Client) DeleteServer(backendName, serverName string, version int) error
 }
 
 // makeRequest is a helper for making authenticated HTTP requests
-func (c *Client) makeRequest(method, path string, body interface{}, result interface{}, version int) error {
+func (c *Client) makeRequest(method, path string, body, result interface{}, version int) error {
 	resp, err := c.makeRawRequest(method, path, body, version)
 	if err != nil {
 		return err
@@ -136,7 +136,7 @@ func (c *Client) makeRawRequest(method, path string, body interface{}, version i
 		url += fmt.Sprintf("%sversion=%d", separator, version)
 	}
 
-	var bodyReader io.Reader
+	var bodyReader io.Reader = http.NoBody
 	if body != nil {
 		jsonBody, err := json.Marshal(body)
 		if err != nil {

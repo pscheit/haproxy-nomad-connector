@@ -44,7 +44,7 @@ func (dmm *DomainMapManager) LoadFromFile() error {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		
+
 		// Skip comments and empty lines
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -55,7 +55,7 @@ func (dmm *DomainMapManager) LoadFromFile() error {
 		if len(parts) >= 2 {
 			domain := parts[0]
 			backendName := parts[1]
-			
+
 			dmm.mappings[domain] = &haproxy.DomainMapping{
 				Domain:      domain,
 				BackendName: backendName,
@@ -71,7 +71,7 @@ func (dmm *DomainMapManager) LoadFromFile() error {
 func (dmm *DomainMapManager) AddMapping(mapping *haproxy.DomainMapping) {
 	dmm.mutex.Lock()
 	defer dmm.mutex.Unlock()
-	
+
 	dmm.mappings[mapping.Domain] = mapping
 }
 
@@ -79,7 +79,7 @@ func (dmm *DomainMapManager) AddMapping(mapping *haproxy.DomainMapping) {
 func (dmm *DomainMapManager) RemoveMapping(domain string) {
 	dmm.mutex.Lock()
 	defer dmm.mutex.Unlock()
-	
+
 	delete(dmm.mappings, domain)
 }
 
@@ -87,7 +87,7 @@ func (dmm *DomainMapManager) RemoveMapping(domain string) {
 func (dmm *DomainMapManager) GetMapping(domain string) (*haproxy.DomainMapping, bool) {
 	dmm.mutex.RLock()
 	defer dmm.mutex.RUnlock()
-	
+
 	mapping, exists := dmm.mappings[domain]
 	return mapping, exists
 }
@@ -96,7 +96,7 @@ func (dmm *DomainMapManager) GetMapping(domain string) (*haproxy.DomainMapping, 
 func (dmm *DomainMapManager) GetAllMappings() map[string]*haproxy.DomainMapping {
 	dmm.mutex.RLock()
 	defer dmm.mutex.RUnlock()
-	
+
 	result := make(map[string]*haproxy.DomainMapping)
 	for k, v := range dmm.mappings {
 		result[k] = v
@@ -154,6 +154,6 @@ func (dmm *DomainMapManager) WriteToFile() error {
 func (dmm *DomainMapManager) Size() int {
 	dmm.mutex.RLock()
 	defer dmm.mutex.RUnlock()
-	
+
 	return len(dmm.mappings)
 }

@@ -20,7 +20,7 @@ var (
 
 func main() {
 	var (
-		configFile = flag.String("config", "", "Configuration file path")
+		configFile  = flag.String("config", "", "Configuration file path")
 		showVersion = flag.Bool("version", false, "Show version information")
 	)
 	flag.Parse()

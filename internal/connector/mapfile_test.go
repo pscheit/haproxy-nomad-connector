@@ -24,7 +24,7 @@ database.internal              db_backend
 # another comment
 cache.example.com              cache_service
 `
-	err := os.WriteFile(mapFile, []byte(testContent), 0644)
+	err := os.WriteFile(mapFile, []byte(testContent), 0600)
 	if err != nil {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
@@ -38,10 +38,10 @@ cache.example.com              cache_service
 
 	// Verify mappings
 	expectedMappings := map[string]string{
-		"api.example.com":    "api_service",
-		"web.example.com":    "web_service", 
-		"database.internal":  "db_backend",
-		"cache.example.com":  "cache_service",
+		"api.example.com":   "api_service",
+		"web.example.com":   "web_service",
+		"database.internal": "db_backend",
+		"cache.example.com": "cache_service",
 	}
 
 	if dmm.Size() != len(expectedMappings) {
@@ -71,7 +71,7 @@ func TestDomainMapManager_LoadFromNonExistentFile(t *testing.T) {
 
 	dmm := NewDomainMapManager(mapFile)
 	err := dmm.LoadFromFile()
-	
+
 	// Should not error on non-existent file
 	if err != nil {
 		t.Errorf("LoadFromFile() should not error on non-existent file: %v", err)
@@ -91,7 +91,7 @@ func TestDomainMapManager_AddRemoveMapping(t *testing.T) {
 		BackendName: "test_backend",
 		Type:        haproxy.DomainTypeExact,
 	}
-	
+
 	dmm.AddMapping(mapping)
 
 	// Verify added
@@ -136,7 +136,7 @@ func TestDomainMapManager_WriteToFile(t *testing.T) {
 			Type:        haproxy.DomainTypeExact,
 		},
 		{
-			Domain:      "web.example.com", 
+			Domain:      "web.example.com",
 			BackendName: "web_service",
 			Type:        haproxy.DomainTypeExact,
 		},
@@ -158,7 +158,7 @@ func TestDomainMapManager_WriteToFile(t *testing.T) {
 	}
 
 	// Verify file exists
-	if _, err := os.Stat(mapFile); os.IsNotExist(err) {
+	if _, statErr := os.Stat(mapFile); os.IsNotExist(statErr) {
 		t.Error("Map file should exist after writing")
 	}
 
@@ -169,7 +169,7 @@ func TestDomainMapManager_WriteToFile(t *testing.T) {
 	}
 
 	contentStr := string(content)
-	
+
 	// Check for header comments
 	if !containsString(contentStr, "# Domain to backend mapping") {
 		t.Error("Written file should contain header comment")
@@ -205,7 +205,7 @@ func TestDomainMapManager_GetAllMappings(t *testing.T) {
 	}
 	mapping2 := &haproxy.DomainMapping{
 		Domain:      "web.example.com",
-		BackendName: "web_service", 
+		BackendName: "web_service",
 		Type:        haproxy.DomainTypePrefix,
 	}
 
@@ -230,7 +230,7 @@ func TestDomainMapManager_GetAllMappings(t *testing.T) {
 
 	// Verify returned map is a copy (not the original)
 	delete(allMappings, "api.example.com")
-	
+
 	// Original should still have the mapping
 	if _, exists := dmm.GetMapping("api.example.com"); !exists {
 		t.Error("Original mapping should still exist after modifying returned copy")
@@ -279,7 +279,7 @@ func TestDomainMapManager_RoundTrip(t *testing.T) {
 		}
 
 		if loaded.BackendName != original.BackendName {
-			t.Errorf("Domain %s: expected backend %s, got %s after round trip", 
+			t.Errorf("Domain %s: expected backend %s, got %s after round trip",
 				original.Domain, original.BackendName, loaded.BackendName)
 		}
 	}

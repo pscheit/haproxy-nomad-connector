@@ -1,3 +1,4 @@
+//go:build integration
 // +build integration
 
 package test
@@ -26,7 +27,7 @@ func TestDataPlaneAPI_RealConnection(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to get API info: %v", err)
 		}
-		
+
 		if info.API.Version == "" {
 			t.Error("Expected API version, got empty string")
 		}
@@ -38,7 +39,7 @@ func TestDataPlaneAPI_RealConnection(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to get backends: %v", err)
 		}
-		
+
 		t.Logf("Found %d backends", len(backends))
 		for _, backend := range backends {
 			t.Logf("Backend: %s (algorithm: %s)", backend.Name, backend.Balance.Algorithm)
@@ -110,7 +111,7 @@ func TestE2E_ServiceLifecycle(t *testing.T) {
 	t.Run("SimpleServiceRegistration", func(t *testing.T) {
 		// Create HAProxy client
 		client := haproxy.NewClient("http://localhost:5555", "admin", "adminpwd")
-		
+
 		// Create service registration event
 		serviceEvent := connector.ServiceEvent{
 			Type: "ServiceRegistration",
@@ -153,4 +154,3 @@ func TestE2E_ServiceLifecycle(t *testing.T) {
 		t.Logf("Service lifecycle test result: %+v", result)
 	})
 }
-

@@ -19,7 +19,7 @@ type Connector struct {
 	nomadClient   *nomad.Client
 	haproxyClient *haproxy.Client
 	logger        *log.Logger
-	
+
 	// Metrics and state
 	mu              sync.RWMutex
 	processedEvents int64
@@ -92,7 +92,7 @@ func (c *Connector) Start(ctx context.Context) error {
 		case <-ctx.Done():
 			c.logger.Println("Connector stopping...")
 			return nil
-			
+
 		case event := <-eventChan:
 			c.processEvent(ctx, event)
 		}
@@ -102,7 +102,7 @@ func (c *Connector) Start(ctx context.Context) error {
 // syncExistingServices performs initial sync of all registered Nomad services
 func (c *Connector) syncExistingServices(ctx context.Context) error {
 	c.logger.Println("Performing initial sync of existing services...")
-	
+
 	services, err := c.nomadClient.GetServices()
 	if err != nil {
 		return fmt.Errorf("failed to get existing services: %w", err)
@@ -144,8 +144,8 @@ func (c *Connector) processEvent(ctx context.Context, event nomad.ServiceEvent) 
 		c.mu.Lock()
 		c.errors++
 		c.mu.Unlock()
-		
-		c.logger.Printf("Error processing event for service %s: %v", 
+
+		c.logger.Printf("Error processing event for service %s: %v",
 			event.Payload.Service.ServiceName, err)
 		return
 	}
@@ -160,14 +160,14 @@ func (c *Connector) processEvent(ctx context.Context, event nomad.ServiceEvent) 
 // startHealthServer starts HTTP server for health checks and metrics
 func (c *Connector) startHealthServer(ctx context.Context) {
 	mux := http.NewServeMux()
-	
+
 	// Health check endpoint
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{"status":"healthy","service":"haproxy-nomad-connector"}`)
 	})
-	
+
 	// Metrics endpoint
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		c.mu.RLock()
@@ -175,7 +175,7 @@ func (c *Connector) startHealthServer(ctx context.Context) {
 		errors := c.errors
 		lastEvent := c.lastEventTime
 		c.mu.RUnlock()
-		
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{
@@ -193,14 +193,14 @@ func (c *Connector) startHealthServer(ctx context.Context) {
 	}
 
 	c.logger.Printf("Starting health server on :8080")
-	
+
 	go func() {
 		<-ctx.Done()
 		if err := server.Shutdown(context.Background()); err != nil {
 			c.logger.Printf("Error shutting down HTTP server: %v", err)
 		}
 	}()
-	
+
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
 		c.logger.Printf("Health server error: %v", err)
 	}

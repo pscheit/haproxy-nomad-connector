@@ -12,11 +12,11 @@ import (
 
 func TestGetServiceCheckFromJob(t *testing.T) {
 	tests := []struct {
-		name           string
-		job            *nomadapi.Job
-		serviceName    string
-		expectedCheck  *ServiceCheck
-		expectedError  bool
+		name          string
+		job           *nomadapi.Job
+		serviceName   string
+		expectedCheck *ServiceCheck
+		expectedError bool
 	}{
 		{
 			name: "HTTP health check in task service",
@@ -257,7 +257,7 @@ func extractServiceCheckFromJob(job *nomadapi.Job, serviceName string) (*Service
 				}
 			}
 		}
-		
+
 		// Also check services defined at task group level
 		for _, service := range taskGroup.Services {
 			if service.Name == serviceName {

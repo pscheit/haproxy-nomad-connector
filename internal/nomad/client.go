@@ -13,11 +13,11 @@ import (
 )
 
 type Client struct {
-	client   *nomadapi.Client
-	address  string
-	token    string
-	region   string
-	logger   *log.Logger
+	client  *nomadapi.Client
+	address string
+	token   string
+	region  string
+	logger  *log.Logger
 }
 
 // ServiceEvent represents a Nomad service registration/deregistration event
@@ -62,11 +62,11 @@ type ServiceCheck struct {
 func NewClient(address, token, region string, logger *log.Logger) (*Client, error) {
 	config := nomadapi.DefaultConfig()
 	config.Address = address
-	
+
 	if token != "" {
 		config.SecretID = token
 	}
-	
+
 	if region != "" {
 		config.Region = region
 	}
@@ -95,7 +95,7 @@ func (c *Client) StreamServiceEvents(ctx context.Context, eventChan chan<- Servi
 			if err := c.streamEvents(ctx, eventChan); err != nil {
 				c.logger.Printf("Event stream error: %v", err)
 				c.logger.Printf("Reconnecting in 5 seconds...")
-				
+
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
@@ -110,7 +110,7 @@ func (c *Client) StreamServiceEvents(ctx context.Context, eventChan chan<- Servi
 func (c *Client) streamEvents(ctx context.Context, eventChan chan<- ServiceEvent) error {
 	// Create HTTP request for event stream
 	url := fmt.Sprintf("%s/v1/event/stream?topic=Service", c.address)
-	
+
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
@@ -143,7 +143,7 @@ func (c *Client) streamEvents(ctx context.Context, eventChan chan<- ServiceEvent
 
 	// Process streaming JSON lines
 	decoder := json.NewDecoder(resp.Body)
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -152,7 +152,7 @@ func (c *Client) streamEvents(ctx context.Context, eventChan chan<- ServiceEvent
 			var eventWrapper struct {
 				Events []ServiceEvent `json:"Events"`
 			}
-			
+
 			if err := decoder.Decode(&eventWrapper); err != nil {
 				if err == io.EOF {
 					return fmt.Errorf("event stream ended")
@@ -166,7 +166,7 @@ func (c *Client) streamEvents(ctx context.Context, eventChan chan<- ServiceEvent
 				if event.Topic == "Service" && event.Payload.Service != nil {
 					select {
 					case eventChan <- event:
-						c.logger.Printf("Processed %s event for service %s", 
+						c.logger.Printf("Processed %s event for service %s",
 							event.Type, event.Payload.Service.ServiceName)
 					case <-ctx.Done():
 						return ctx.Err()
@@ -224,7 +224,7 @@ func (c *Client) GetServiceCheckFromJob(jobID, serviceName string) (*ServiceChec
 				}
 			}
 		}
-		
+
 		// Also check services defined at task group level
 		for _, service := range taskGroup.Services {
 			if service.Name == serviceName {

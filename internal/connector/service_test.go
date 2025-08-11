@@ -92,7 +92,7 @@ func TestGenerateServerName(t *testing.T) {
 		t.Run(tt.serviceName, func(t *testing.T) {
 			result := generateServerName(tt.serviceName, tt.address, tt.port)
 			if result != tt.expected {
-				t.Errorf("generateServerName(%q, %q, %d) = %q, expected %q", 
+				t.Errorf("generateServerName(%q, %q, %d) = %q, expected %q",
 					tt.serviceName, tt.address, tt.port, result, tt.expected)
 			}
 		})
