@@ -119,7 +119,7 @@ func (c *Connector) syncExistingServices(ctx context.Context) error {
 			},
 		}
 
-		if result, err := ProcessNomadServiceEvent(ctx, c.haproxyClient, event, c.logger); err != nil {
+		if result, err := ProcessNomadServiceEvent(ctx, c.haproxyClient, c.nomadClient, event, c.logger); err != nil {
 			c.logger.Printf("Failed to sync service %s: %v", svc.ServiceName, err)
 		} else {
 			if resultMap, ok := result.(map[string]string); ok && resultMap["status"] == "created" {
@@ -139,7 +139,7 @@ func (c *Connector) processEvent(ctx context.Context, event nomad.ServiceEvent) 
 	c.lastEventTime = time.Now()
 	c.mu.Unlock()
 
-	result, err := ProcessNomadServiceEvent(ctx, c.haproxyClient, event, c.logger)
+	result, err := ProcessNomadServiceEvent(ctx, c.haproxyClient, c.nomadClient, event, c.logger)
 	if err != nil {
 		c.mu.Lock()
 		c.errors++

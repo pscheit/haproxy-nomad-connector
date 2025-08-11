@@ -22,10 +22,14 @@ type Balance struct {
 }
 
 type Server struct {
-	Name    string `json:"name"`
-	Address string `json:"address"`
-	Port    int    `json:"port"`
-	Check   string `json:"check,omitempty"`
+	Name        string `json:"name"`
+	Address     string `json:"address"`
+	Port        int    `json:"port"`
+	Check       string `json:"check,omitempty"`
+	CheckType   string `json:"check_type,omitempty"`   // "tcp", "http", "disabled"
+	CheckPath   string `json:"check_path,omitempty"`   // HTTP check path
+	CheckMethod string `json:"check_method,omitempty"` // HTTP check method
+	CheckHost   string `json:"check_host,omitempty"`   // HTTP check host header
 }
 
 type Frontend struct {
@@ -65,3 +69,44 @@ const (
 	BackendStrategyUseExisting     BackendStrategy = "use_existing"
 	BackendStrategyFailOnConflict  BackendStrategy = "fail_on_conflict"
 )
+
+// Domain mapping types
+type DomainMapping struct {
+	Domain      string      `json:"domain"`
+	BackendName string      `json:"backend_name"`
+	Type        DomainType  `json:"type"`
+}
+
+type DomainType string
+
+const (
+	DomainTypeExact  DomainType = "exact"  // exact domain match
+	DomainTypePrefix DomainType = "prefix" // domain prefix match
+	DomainTypeRegex  DomainType = "regex"  // regex pattern match
+)
+
+// DomainMapConfig holds configuration for domain map file management
+type DomainMapConfig struct {
+	FilePath string `json:"file_path"`
+	Enabled  bool   `json:"enabled"`
+}
+
+// APIError represents an API error response
+type APIError struct {
+	StatusCode int    `json:"status_code"`
+	Message    string `json:"message"`
+}
+
+func (e *APIError) Error() string {
+	return e.Message
+}
+
+// ClientInterface defines the interface for HAProxy client operations
+type ClientInterface interface {
+	GetConfigVersion() (int, error)
+	GetBackend(name string) (*Backend, error)
+	CreateBackend(backend Backend, version int) (*Backend, error)
+	GetServers(backendName string) ([]Server, error)
+	CreateServer(backendName string, server Server, version int) (*Server, error)
+	DeleteServer(backendName, serverName string, version int) error
+}

@@ -1,0 +1,20 @@
+{
+  "nomad": {
+    "address": "http://nomad-server:4646",
+    "token": "",
+    "region": "global"
+  },
+  "haproxy": {
+    "address": "http://haproxy:5555",
+    "username": "admin",
+    "password": "adminpwd",
+    "backend_strategy": "use_existing"
+  },
+  "domain_map": {
+    "enabled": true,
+    "file_path": "/etc/haproxy2/domain-backend.map"
+  },
+  "log": {
+    "level": "info"
+  }
+}

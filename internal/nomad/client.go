@@ -49,6 +49,15 @@ type Service struct {
 	ModifyIndex uint64            `json:"ModifyIndex"`
 }
 
+// ServiceCheck represents a Nomad service health check configuration
+type ServiceCheck struct {
+	Type     string        // "http", "tcp", "script", "grpc"
+	Path     string        // HTTP path for http checks
+	Method   string        // HTTP method for http checks
+	Interval time.Duration // Check interval
+	Timeout  time.Duration // Check timeout
+}
+
 // NewClient creates a new Nomad client
 func NewClient(address, token, region string, logger *log.Logger) (*Client, error) {
 	config := nomadapi.DefaultConfig()
@@ -174,4 +183,65 @@ func (c *Client) GetServices() ([]*Service, error) {
 	// This can be improved later when we sort out the exact API structure
 	c.logger.Printf("Initial sync disabled - relying on event stream for service discovery")
 	return []*Service{}, nil
+}
+
+// GetJobSpec retrieves the job specification for a given job ID
+func (c *Client) GetJobSpec(jobID string) (*nomadapi.Job, error) {
+	job, _, err := c.client.Jobs().Info(jobID, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get job spec for %s: %w", jobID, err)
+	}
+	return job, nil
+}
+
+// GetServiceCheckFromJob extracts the health check configuration for a specific service from a job
+func (c *Client) GetServiceCheckFromJob(jobID, serviceName string) (*ServiceCheck, error) {
+	job, err := c.GetJobSpec(jobID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Search through all task groups
+	for _, taskGroup := range job.TaskGroups {
+		// Search through all tasks
+		for _, task := range taskGroup.Tasks {
+			// Search through all services
+			for _, service := range task.Services {
+				if service.Name == serviceName {
+					// If there are checks defined, use the first one
+					if len(service.Checks) > 0 {
+						check := service.Checks[0]
+						return &ServiceCheck{
+							Type:     check.Type,
+							Path:     check.Path,
+							Method:   check.Method,
+							Interval: check.Interval,
+							Timeout:  check.Timeout,
+						}, nil
+					}
+					// Service found but no checks defined
+					return nil, nil
+				}
+			}
+		}
+		
+		// Also check services defined at task group level
+		for _, service := range taskGroup.Services {
+			if service.Name == serviceName {
+				if len(service.Checks) > 0 {
+					check := service.Checks[0]
+					return &ServiceCheck{
+						Type:     check.Type,
+						Path:     check.Path,
+						Method:   check.Method,
+						Interval: check.Interval,
+						Timeout:  check.Timeout,
+					}, nil
+				}
+				return nil, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("service %s not found in job %s", serviceName, jobID)
 }

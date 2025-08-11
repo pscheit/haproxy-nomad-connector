@@ -27,7 +27,8 @@ Automatically configures HAProxy based on Nomad service registrations:
 1. **Nomad service registers** with `haproxy.*` tags
 2. **Connector processes event** and classifies service type  
 3. **HAProxy config updated** via Data Plane API
-4. **Changes persist** automatically - survives restarts
+4. **Domain mapping updated** (optional) - automatic domain-to-backend mapping
+5. **Changes persist** automatically - survives restarts
 
 ```nomad
 # Nomad job file
@@ -37,17 +38,24 @@ service {
   tags = [
     "haproxy.enable=true",
     "haproxy.backend=dynamic", 
+    "haproxy.domain=api.example.com",  # NEW: Automatic domain mapping
     "haproxy.check.path=/health"
   ]
 }
 ```
 
-↓ **Becomes HAProxy config:**
+↓ **Becomes HAProxy config + domain mapping:**
 
 ```haproxy
+# HAProxy backend (via Data Plane API)
 backend api_service
   balance roundrobin
   server api_service_1 192.168.1.10:8080 check
+```
+
+```
+# Domain-backend map file (auto-generated)
+api.example.com                api_service
 ```
 
 ## 🏗️ Architecture
@@ -144,11 +152,77 @@ For dynamic services, the connector checks that existing backends have:
 
 If an incompatible backend exists, the connector will fail with a clear error message instead of silently ignoring the issue.
 
+## 🌐 Domain Mapping
+
+**NEW:** Automatic domain-to-backend mapping eliminates manual HAProxy map file management!
+
+### Quick Setup
+
+```bash
+# Enable domain mapping in config
+export DOMAIN_MAP_ENABLED=true
+export DOMAIN_MAP_FILE_PATH=/etc/haproxy2/domain-backend.map
+
+# Or in config.json:
+{
+  "domain_map": {
+    "enabled": true,
+    "file_path": "/etc/haproxy2/domain-backend.map"
+  }
+}
+```
+
+### How It Works
+
+Add `haproxy.domain` tag to your Nomad services:
+
+```hcl
+service {
+  name = "crm-prod"
+  port = 8080
+  tags = [
+    "haproxy.enable=true",
+    "haproxy.backend=dynamic",
+    "haproxy.domain=crm.ps-webforge.net"  # Automatic domain mapping!
+  ]
+}
+```
+
+The connector automatically:
+
+1. **Service registers** → Creates `crm_prod` backend
+2. **Domain mapping created** → Adds `crm.ps-webforge.net → crm_prod` to map file
+3. **Service deregisters** → Removes domain mapping when no servers remain
+
+### Advanced Domain Types
+
+```hcl
+# Exact domain match (default)
+"haproxy.domain=api.example.com"
+
+# Prefix matching  
+"haproxy.domain=api.example.com"
+"haproxy.domain.type=prefix"
+
+# Regex patterns
+"haproxy.domain=.*\\.assets\\.example\\.com"
+"haproxy.domain.type=regex"
+```
+
+### Benefits
+
+- ✅ **Zero manual map file editing**
+- ✅ **GitOps friendly** - domains defined in Nomad jobs
+- ✅ **Automatic cleanup** - removes stale mappings
+- ✅ **Atomic updates** - consistent map file generation
+- ✅ **Backward compatible** - works alongside manual entries
+
 ## 🔍 Comparison
 
 | Feature | Traefik | haproxy-nomad-connector |
 |---------|---------|-------------------------|
 | Service Discovery | ✅ Built-in | ✅ This project |
+| Domain Mapping | ✅ Built-in | ✅ **NEW: Automatic** |
 | Performance | Good | ⚡ Excellent (HAProxy) |  
 | Configuration | Limited | 🎯 Full HAProxy power |
 | Persistence | Memory | 💾 Config files |
@@ -177,6 +251,7 @@ See integration tests for examples of the expected behavior.
 - ✅ Configuration persistence
 - ✅ Nomad event stream listener
 - ✅ Backend compatibility checking
+- ✅ **NEW: Automatic domain mapping** - eliminates manual map file management
 - ✅ Robust error handling and clear error messages
 - 🔄 Custom backend support (planned)
 - 🔄 Advanced health check config (planned)
