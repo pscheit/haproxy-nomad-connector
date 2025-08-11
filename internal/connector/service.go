@@ -38,7 +38,7 @@ type Service struct {
 
 // ProcessServiceEvent processes a Nomad service event and updates HAProxy
 func ProcessServiceEvent(ctx context.Context, client haproxy.ClientInterface, event *ServiceEvent) (interface{}, error) {
-	return ProcessServiceEventWithDomainMap(ctx, client, &event, nil)
+	return ProcessServiceEventWithDomainMap(ctx, client, event, nil)
 }
 
 // ProcessServiceEventWithDomainMap processes a Nomad service event and updates HAProxy and domain mapping
@@ -93,7 +93,7 @@ func ProcessNomadServiceEvent(
 	logger.Printf("Processing %s for service %s at %s:%d",
 		event.Type, svc.ServiceName, svc.Address, svc.Port)
 
-	return ProcessServiceEventWithHealthCheck(ctx, haproxyClient, nomadClient, serviceEvent, logger)
+	return ProcessServiceEventWithHealthCheck(ctx, haproxyClient, nomadClient, &serviceEvent, logger)
 }
 
 // ProcessServiceEventWithHealthCheck processes a service event with health check synchronization from Nomad
@@ -109,10 +109,10 @@ func ProcessServiceEventWithHealthCheck(
 
 	switch serviceType {
 	case haproxy.ServiceTypeDynamic:
-		return processDynamicServiceWithHealthCheck(ctx, haproxyClient, nomadClient, &event, logger)
+		return processDynamicServiceWithHealthCheck(ctx, haproxyClient, nomadClient, event, logger)
 	case haproxy.ServiceTypeCustom:
 		// TODO: Implement custom service with health check
-		return ProcessServiceEvent(ctx, haproxyClient, &event)
+		return ProcessServiceEvent(ctx, haproxyClient, event)
 	case haproxy.ServiceTypeStatic:
 		return map[string]string{"status": "ignored", "reason": "static service"}, nil
 	default:
