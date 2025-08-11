@@ -45,6 +45,21 @@ linters-settings:
       - prefix(github.com/pscheit/haproxy-nomad-connector)
     section-separators:
       - newLine
+  depguard:
+    rules:
+      main:
+        files:
+          - "!**/*_test.go"
+        allow:
+          - $all
+        deny:
+          - pkg: "github.com/pkg/errors"
+            desc: "use standard library errors package"
+      tests:
+        files:
+          - "**/*_test.go"
+        allow:
+          - $all
 
 linters:
   disable-all: true
