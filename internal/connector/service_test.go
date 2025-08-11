@@ -1,7 +1,12 @@
 package connector
 
 import (
+	"context"
+	"fmt"
+	"log"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/pscheit/haproxy-nomad-connector/internal/haproxy"
 )
@@ -96,5 +101,165 @@ func TestGenerateServerName(t *testing.T) {
 					tt.serviceName, tt.address, tt.port, result, tt.expected)
 			}
 		})
+	}
+}
+
+// mockHAProxyClient implements haproxy.ClientInterface for testing
+type mockHAProxyClient struct {
+	drainCalled       bool
+	deleteCalled      bool
+	drainError        error
+	deleteError       error
+	getVersionError   error
+	getServersServers []haproxy.Server
+	getServersError   error
+}
+
+func (m *mockHAProxyClient) GetConfigVersion() (int, error) {
+	return 1, m.getVersionError
+}
+
+func (m *mockHAProxyClient) GetBackend(name string) (*haproxy.Backend, error) {
+	return &haproxy.Backend{Name: name}, nil
+}
+
+func (m *mockHAProxyClient) CreateBackend(backend haproxy.Backend, version int) (*haproxy.Backend, error) {
+	return &backend, nil
+}
+
+func (m *mockHAProxyClient) GetServers(backendName string) ([]haproxy.Server, error) {
+	return m.getServersServers, m.getServersError
+}
+
+func (m *mockHAProxyClient) CreateServer(backendName string, server *haproxy.Server, version int) (*haproxy.Server, error) {
+	return server, nil
+}
+
+func (m *mockHAProxyClient) DeleteServer(backendName, serverName string, version int) error {
+	m.deleteCalled = true
+	return m.deleteError
+}
+
+func (m *mockHAProxyClient) GetRuntimeServer(backendName, serverName string) (*haproxy.RuntimeServer, error) {
+	return &haproxy.RuntimeServer{}, nil
+}
+
+func (m *mockHAProxyClient) SetServerState(backendName, serverName, adminState string) error {
+	return nil
+}
+
+func (m *mockHAProxyClient) DrainServer(backendName, serverName string) error {
+	m.drainCalled = true
+	return m.drainError
+}
+
+func (m *mockHAProxyClient) ReadyServer(backendName, serverName string) error {
+	return nil
+}
+
+func (m *mockHAProxyClient) MaintainServer(backendName, serverName string) error {
+	return nil
+}
+
+func TestHandleServiceDeregistrationWithDrainTimeout_DrainSuccess(t *testing.T) {
+	mockClient := &mockHAProxyClient{}
+	logger := log.New(os.Stdout, "test: ", log.LstdFlags)
+
+	event := &ServiceEvent{
+		Type: "ServiceDeregistration",
+		Service: Service{
+			ServiceName: "test-service",
+			Address:     "10.0.0.1",
+			Port:        8080,
+			Tags:        []string{"haproxy.enable=true"},
+		},
+	}
+
+	result, err := handleServiceDeregistrationWithDrainTimeout(
+		context.Background(),
+		mockClient,
+		event,
+		nil, // no domain manager
+		2,   // 2 second drain timeout for test
+		logger,
+	)
+
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	if !mockClient.drainCalled {
+		t.Error("Expected DrainServer to be called")
+	}
+
+	resultMap, ok := result.(map[string]string)
+	if !ok {
+		t.Fatal("Expected result to be map[string]string")
+	}
+
+	if resultMap["status"] != "draining" {
+		t.Errorf("Expected status 'draining', got %s", resultMap["status"])
+	}
+
+	if resultMap["method"] != "graceful_drain" {
+		t.Errorf("Expected method 'graceful_drain', got %s", resultMap["method"])
+	}
+
+	// Wait for delayed deletion to occur
+	time.Sleep(3 * time.Second)
+
+	if !mockClient.deleteCalled {
+		t.Error("Expected DeleteServer to be called after drain timeout")
+	}
+}
+
+func TestHandleServiceDeregistrationWithDrainTimeout_DrainFails(t *testing.T) {
+	mockClient := &mockHAProxyClient{
+		drainError: fmt.Errorf("drain failed"),
+	}
+	logger := log.New(os.Stdout, "test: ", log.LstdFlags)
+
+	event := &ServiceEvent{
+		Type: "ServiceDeregistration",
+		Service: Service{
+			ServiceName: "test-service",
+			Address:     "10.0.0.1",
+			Port:        8080,
+			Tags:        []string{"haproxy.enable=true"},
+		},
+	}
+
+	result, err := handleServiceDeregistrationWithDrainTimeout(
+		context.Background(),
+		mockClient,
+		event,
+		nil, // no domain manager
+		2,   // 2 second drain timeout for test
+		logger,
+	)
+
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	if !mockClient.drainCalled {
+		t.Error("Expected DrainServer to be called")
+	}
+
+	if !mockClient.deleteCalled {
+		t.Error("Expected DeleteServer to be called as fallback")
+	}
+
+	resultMap, ok := result.(map[string]string)
+	if !ok {
+		t.Fatal("Expected result to be map[string]string")
+	}
+
+	if resultMap["status"] != "deleted" {
+		t.Errorf("Expected status 'deleted', got %s", resultMap["status"])
+	}
+
+	if resultMap["method"] != "immediate_deletion" {
+		t.Errorf("Expected method 'immediate_deletion', got %s", resultMap["method"])
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 )
 
 type Config struct {
@@ -24,6 +25,7 @@ type HAProxyConfig struct {
 	Username        string `json:"username"`
 	Password        string `json:"password"`
 	BackendStrategy string `json:"backend_strategy"`
+	DrainTimeoutSec int    `json:"drain_timeout_sec"` // Time to wait before removing drained servers
 }
 
 type LogConfig struct {
@@ -49,6 +51,7 @@ func Load(configFile string) (*Config, error) {
 			Username:        getEnv("HAPROXY_USERNAME", "admin"),
 			Password:        getEnv("HAPROXY_PASSWORD", "adminpwd"),
 			BackendStrategy: getEnv("HAPROXY_BACKEND_STRATEGY", "use_existing"),
+			DrainTimeoutSec: getEnvInt("HAPROXY_DRAIN_TIMEOUT_SEC", 10),
 		},
 		Log: LogConfig{
 			Level: getEnv("LOG_LEVEL", "info"),
@@ -77,6 +80,15 @@ func Load(configFile string) (*Config, error) {
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
+	}
+	return defaultValue
+}
+
+func getEnvInt(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		if intValue, err := strconv.Atoi(value); err == nil {
+			return intValue
+		}
 	}
 	return defaultValue
 }

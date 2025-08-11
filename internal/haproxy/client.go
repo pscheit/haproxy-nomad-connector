@@ -102,6 +102,41 @@ func (c *Client) DeleteServer(backendName, serverName string, version int) error
 	return c.makeRequest("DELETE", path, nil, nil, version)
 }
 
+// GetRuntimeServer gets runtime server information
+func (c *Client) GetRuntimeServer(backendName, serverName string) (*RuntimeServer, error) {
+	var server RuntimeServer
+	path := fmt.Sprintf("/v3/services/haproxy/runtime/backends/%s/servers/%s", backendName, serverName)
+	err := c.makeRequest("GET", path, nil, &server, 0)
+	return &server, err
+}
+
+// SetServerState sets the administrative state of a server (ready, drain, maint)
+func (c *Client) SetServerState(backendName, serverName, adminState string) error {
+	path := fmt.Sprintf("/v3/services/haproxy/runtime/backends/%s/servers/%s", backendName, serverName)
+	
+	// Create the runtime server object with the new admin state
+	server := RuntimeServer{
+		AdminState: adminState,
+	}
+	
+	return c.makeRequest("PUT", path, server, nil, 0)
+}
+
+// DrainServer puts a server into drain mode (completes existing connections, no new ones)
+func (c *Client) DrainServer(backendName, serverName string) error {
+	return c.SetServerState(backendName, serverName, "drain")
+}
+
+// ReadyServer puts a server into ready mode (accepts new connections)
+func (c *Client) ReadyServer(backendName, serverName string) error {
+	return c.SetServerState(backendName, serverName, "ready")
+}
+
+// MaintainServer puts a server into maintenance mode (no connections)
+func (c *Client) MaintainServer(backendName, serverName string) error {
+	return c.SetServerState(backendName, serverName, "maint")
+}
+
 // makeRequest is a helper for making authenticated HTTP requests
 func (c *Client) makeRequest(method, path string, body, result interface{}, version int) error {
 	resp, err := c.makeRawRequest(method, path, body, version)

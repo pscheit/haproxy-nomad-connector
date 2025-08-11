@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/pscheit/haproxy-nomad-connector/internal/haproxy"
 	"github.com/pscheit/haproxy-nomad-connector/internal/nomad"
@@ -104,14 +105,26 @@ func ProcessServiceEventWithHealthCheck(
 	event *ServiceEvent,
 	logger *log.Logger,
 ) (interface{}, error) {
+	return ProcessServiceEventWithHealthCheckAndConfig(ctx, haproxyClient, nomadClient, event, logger, 10)
+}
+
+// ProcessServiceEventWithHealthCheckAndConfig processes a service event with configurable drain timeout
+func ProcessServiceEventWithHealthCheckAndConfig(
+	ctx context.Context,
+	haproxyClient haproxy.ClientInterface,
+	nomadClient *nomad.Client,
+	event *ServiceEvent,
+	logger *log.Logger,
+	drainTimeoutSec int,
+) (interface{}, error) {
 	// Classify service based on tags
 	serviceType := classifyService(event.Service.Tags)
 
 	switch serviceType {
 	case haproxy.ServiceTypeDynamic:
-		return processDynamicServiceWithHealthCheck(ctx, haproxyClient, nomadClient, event, logger)
+		return processDynamicServiceWithHealthCheckAndConfig(ctx, haproxyClient, nomadClient, event, logger, drainTimeoutSec)
 	case haproxy.ServiceTypeCustom:
-		// TODO: Implement custom service with health check
+		// TODO: Implement custom service with health check and drain timeout
 		return ProcessServiceEvent(ctx, haproxyClient, event)
 	case haproxy.ServiceTypeStatic:
 		return map[string]string{"status": "ignored", "reason": "static service"}, nil
@@ -173,11 +186,23 @@ func processDynamicServiceWithHealthCheck(
 	event *ServiceEvent,
 	logger *log.Logger,
 ) (interface{}, error) {
+	return processDynamicServiceWithHealthCheckAndConfig(ctx, client, nomadClient, event, logger, 10)
+}
+
+// processDynamicServiceWithHealthCheckAndConfig creates a new backend for the service with configurable drain timeout
+func processDynamicServiceWithHealthCheckAndConfig(
+	ctx context.Context,
+	client haproxy.ClientInterface,
+	nomadClient *nomad.Client,
+	event *ServiceEvent,
+	logger *log.Logger,
+	drainTimeoutSec int,
+) (interface{}, error) {
 	switch event.Type {
 	case "ServiceRegistration":
 		return handleServiceRegistrationWithHealthCheck(ctx, client, nomadClient, event, logger)
 	case "ServiceDeregistration":
-		return handleServiceDeregistrationWithDomainMap(ctx, client, event, nil)
+		return handleServiceDeregistrationWithDrainTimeout(ctx, client, event, nil, drainTimeoutSec, logger)
 	default:
 		return map[string]string{"status": "skipped", "reason": "unknown event type"}, nil
 	}
@@ -279,25 +304,70 @@ func handleServiceDeregistrationWithDomainMap(
 	event *ServiceEvent,
 	domainMapManager *DomainMapManager,
 ) (interface{}, error) {
-	// Get current config version
-	version, err := client.GetConfigVersion()
-	if err != nil {
-		return nil, err
-	}
+	return handleServiceDeregistrationWithDrainTimeout(ctx, client, event, domainMapManager, 10, nil)
+}
 
+func handleServiceDeregistrationWithDrainTimeout(
+	ctx context.Context,
+	client haproxy.ClientInterface,
+	event *ServiceEvent,
+	domainMapManager *DomainMapManager,
+	drainTimeoutSec int,
+	logger *log.Logger,
+) (interface{}, error) {
 	backendName := sanitizeServiceName(event.Service.ServiceName)
 	serverName := generateServerName(event.Service.ServiceName, event.Service.Address, event.Service.Port)
 
-	// Remove server from backend
-	err = client.DeleteServer(backendName, serverName, version)
-	if err != nil {
-		return nil, fmt.Errorf("failed to delete server %s from backend %s: %w", serverName, backendName, err)
-	}
-
+	// Use graceful shutdown approach with drain state
 	result := map[string]string{
-		"status":  "deleted",
 		"backend": backendName,
 		"server":  serverName,
+	}
+
+	// First, try to drain the server to allow existing connections to complete
+	err := client.DrainServer(backendName, serverName)
+	if err != nil {
+		// If drain fails (maybe server doesn't exist), try direct deletion
+		version, versionErr := client.GetConfigVersion()
+		if versionErr != nil {
+			return nil, fmt.Errorf("failed to get config version for fallback deletion: %w", versionErr)
+		}
+		
+		err = client.DeleteServer(backendName, serverName, version)
+		if err != nil {
+			return nil, fmt.Errorf("failed to delete server %s from backend %s: %w", serverName, backendName, err)
+		}
+		
+		result["status"] = "deleted"
+		result["method"] = "immediate_deletion"
+	} else {
+		result["status"] = "draining"
+		result["method"] = "graceful_drain"
+		
+		// Schedule delayed removal after drain period
+		go func() {
+			drainDuration := time.Duration(drainTimeoutSec) * time.Second
+			time.Sleep(drainDuration)
+			
+			version, versionErr := client.GetConfigVersion()
+			if versionErr != nil {
+				if logger != nil {
+					logger.Printf("Warning: failed to get config version for delayed deletion: %v", versionErr)
+				}
+				return
+			}
+			
+			deleteErr := client.DeleteServer(backendName, serverName, version)
+			if deleteErr != nil {
+				if logger != nil {
+					logger.Printf("Warning: failed delayed deletion of server %s from backend %s: %v", serverName, backendName, deleteErr)
+				}
+			} else {
+				if logger != nil {
+					logger.Printf("Successfully completed graceful removal of server %s from backend %s after %ds drain", serverName, backendName, drainTimeoutSec)
+				}
+			}
+		}()
 	}
 
 	// Handle domain mapping removal if this was the only instance of the service
@@ -306,8 +376,8 @@ func handleServiceDeregistrationWithDomainMap(
 		if domainMapping != nil {
 			// Check if there are other servers in the backend
 			existingServers, err := client.GetServers(backendName)
-			if err == nil && len(existingServers) == 0 {
-				// No more servers in this backend, remove domain mapping
+			if err == nil && len(existingServers) <= 1 {
+				// Only this server or no servers remaining, remove domain mapping
 				domainMapManager.RemoveMapping(domainMapping.Domain)
 				if err := domainMapManager.WriteToFile(); err != nil {
 					result["domain_map_warning"] = fmt.Sprintf("failed to update domain map: %v", err)

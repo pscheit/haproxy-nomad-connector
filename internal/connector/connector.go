@@ -99,6 +99,39 @@ func (c *Connector) Start(ctx context.Context) error {
 	}
 }
 
+// processNomadServiceEventWithConfig processes a Nomad service event using connector configuration
+func (c *Connector) processNomadServiceEventWithConfig(ctx context.Context, event nomad.ServiceEvent) (interface{}, error) {
+	if event.Payload.Service == nil {
+		return nil, fmt.Errorf("event payload missing service data")
+	}
+
+	svc := event.Payload.Service
+
+	// Convert to internal event structure
+	serviceEvent := ServiceEvent{
+		Type: event.Type,
+		Service: Service{
+			ServiceName: svc.ServiceName,
+			Address:     svc.Address,
+			Port:        svc.Port,
+			Tags:        svc.Tags,
+			JobID:       svc.JobID,
+		},
+	}
+
+	c.logger.Printf("Processing %s for service %s at %s:%d",
+		event.Type, svc.ServiceName, svc.Address, svc.Port)
+
+	return ProcessServiceEventWithHealthCheckAndConfig(
+		ctx, 
+		c.haproxyClient, 
+		c.nomadClient, 
+		&serviceEvent, 
+		c.logger,
+		c.config.HAProxy.DrainTimeoutSec,
+	)
+}
+
 // syncExistingServices performs initial sync of all registered Nomad services
 func (c *Connector) syncExistingServices(ctx context.Context) error {
 	c.logger.Println("Performing initial sync of existing services...")
@@ -139,7 +172,7 @@ func (c *Connector) processEvent(ctx context.Context, event nomad.ServiceEvent) 
 	c.lastEventTime = time.Now()
 	c.mu.Unlock()
 
-	result, err := ProcessNomadServiceEvent(ctx, c.haproxyClient, c.nomadClient, event, c.logger)
+	result, err := c.processNomadServiceEventWithConfig(ctx, event)
 	if err != nil {
 		c.mu.Lock()
 		c.errors++

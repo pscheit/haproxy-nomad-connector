@@ -126,3 +126,123 @@ func TestClient_CreateServer(t *testing.T) {
 		t.Fatalf("Failed to create server: %v", err)
 	}
 }
+
+func TestClient_DrainServer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "PUT" {
+			t.Errorf("Expected PUT, got %s", r.Method)
+		}
+		if !strings.Contains(r.URL.Path, "/runtime/backends/test-backend/servers/server1") {
+			t.Errorf("Expected runtime server path, got %s", r.URL.Path)
+		}
+
+		var runtimeServer RuntimeServer
+		if err := json.NewDecoder(r.Body).Decode(&runtimeServer); err != nil {
+			t.Errorf("Failed to decode request body: %v", err)
+		}
+		if runtimeServer.AdminState != "drain" {
+			t.Errorf("Expected admin_state 'drain', got %s", runtimeServer.AdminState)
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "admin", "password")
+
+	err := client.DrainServer("test-backend", "server1")
+	if err != nil {
+		t.Fatalf("Failed to drain server: %v", err)
+	}
+}
+
+func TestClient_ReadyServer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "PUT" {
+			t.Errorf("Expected PUT, got %s", r.Method)
+		}
+
+		var runtimeServer RuntimeServer
+		if err := json.NewDecoder(r.Body).Decode(&runtimeServer); err != nil {
+			t.Errorf("Failed to decode request body: %v", err)
+		}
+		if runtimeServer.AdminState != "ready" {
+			t.Errorf("Expected admin_state 'ready', got %s", runtimeServer.AdminState)
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "admin", "password")
+
+	err := client.ReadyServer("test-backend", "server1")
+	if err != nil {
+		t.Fatalf("Failed to ready server: %v", err)
+	}
+}
+
+func TestClient_MaintainServer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "PUT" {
+			t.Errorf("Expected PUT, got %s", r.Method)
+		}
+
+		var runtimeServer RuntimeServer
+		if err := json.NewDecoder(r.Body).Decode(&runtimeServer); err != nil {
+			t.Errorf("Failed to decode request body: %v", err)
+		}
+		if runtimeServer.AdminState != "maint" {
+			t.Errorf("Expected admin_state 'maint', got %s", runtimeServer.AdminState)
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "admin", "password")
+
+	err := client.MaintainServer("test-backend", "server1")
+	if err != nil {
+		t.Fatalf("Failed to maintain server: %v", err)
+	}
+}
+
+func TestClient_GetRuntimeServer(t *testing.T) {
+	expectedServer := RuntimeServer{
+		Address:          "192.168.1.10",
+		AdminState:       "ready",
+		OperationalState: "up",
+		Port:             8080,
+		ServerID:         1,
+		ServerName:       "server1",
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("Expected GET, got %s", r.Method)
+		}
+		if !strings.Contains(r.URL.Path, "/runtime/backends/test-backend/servers/server1") {
+			t.Errorf("Expected runtime server path, got %s", r.URL.Path)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(expectedServer)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "admin", "password")
+
+	result, err := client.GetRuntimeServer("test-backend", "server1")
+	if err != nil {
+		t.Fatalf("Failed to get runtime server: %v", err)
+	}
+
+	if result.AdminState != expectedServer.AdminState {
+		t.Errorf("Expected AdminState %s, got %s", expectedServer.AdminState, result.AdminState)
+	}
+	if result.Address != expectedServer.Address {
+		t.Errorf("Expected Address %s, got %s", expectedServer.Address, result.Address)
+	}
+}

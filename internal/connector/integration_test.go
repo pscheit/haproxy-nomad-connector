@@ -77,6 +77,31 @@ func (m *MockHAProxyClient) DeleteServer(backendName, serverName string, version
 	return &haproxy.APIError{StatusCode: 404}
 }
 
+// Runtime server management methods
+func (m *MockHAProxyClient) GetRuntimeServer(backendName, serverName string) (*haproxy.RuntimeServer, error) {
+	return &haproxy.RuntimeServer{
+		AdminState: "ready",
+		ServerName: serverName,
+	}, nil
+}
+
+func (m *MockHAProxyClient) SetServerState(backendName, serverName, adminState string) error {
+	// For mock, just return success
+	return nil
+}
+
+func (m *MockHAProxyClient) DrainServer(backendName, serverName string) error {
+	return nil
+}
+
+func (m *MockHAProxyClient) ReadyServer(backendName, serverName string) error {
+	return nil
+}
+
+func (m *MockHAProxyClient) MaintainServer(backendName, serverName string) error {
+	return nil
+}
+
 func TestServiceRegistrationWithDomainMapping(t *testing.T) {
 	tmpDir := t.TempDir()
 	mapFile := filepath.Join(tmpDir, "domain-backend.map")
@@ -231,17 +256,22 @@ func TestServiceDeregistrationWithDomainMapping(t *testing.T) {
 		t.Fatalf("Expected result to be map[string]string, got %T", result)
 	}
 
-	if resultMap["status"] != "deleted" {
-		t.Errorf("Expected status 'deleted', got %s", resultMap["status"])
+	// With the new drain functionality, status should be "draining" instead of "deleted"
+	if resultMap["status"] != "draining" {
+		t.Errorf("Expected status 'draining', got %s", resultMap["status"])
 	}
 
-	// Verify server was removed
+	if resultMap["method"] != "graceful_drain" {
+		t.Errorf("Expected method 'graceful_drain', got %s", resultMap["method"])
+	}
+
+	// Server should still be present immediately after drain (will be removed after timeout)
 	servers, err := client.GetServers("api_service")
 	if err != nil {
 		t.Errorf("Failed to get servers: %v", err)
 	}
-	if len(servers) != 0 {
-		t.Errorf("Expected 0 servers after deregistration, got %d", len(servers))
+	if len(servers) != 1 {
+		t.Errorf("Expected 1 server during drain period, got %d", len(servers))
 	}
 
 	// Verify domain mapping was removed (since no servers left)

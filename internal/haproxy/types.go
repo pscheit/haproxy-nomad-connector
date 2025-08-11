@@ -32,6 +32,15 @@ type Server struct {
 	CheckHost   string `json:"check_host,omitempty"`   // HTTP check host header
 }
 
+type RuntimeServer struct {
+	Address          string `json:"address,omitempty"`
+	AdminState       string `json:"admin_state,omitempty"`       // "ready", "drain", "maint"
+	OperationalState string `json:"operational_state,omitempty"` // "up", "down", etc.
+	Port             int    `json:"port,omitempty"`
+	ServerID         int    `json:"server_id,omitempty"`
+	ServerName       string `json:"server_name,omitempty"`
+}
+
 type Frontend struct {
 	Name           string `json:"name"`
 	DefaultBackend string `json:"default_backend,omitempty"`
@@ -109,4 +118,11 @@ type ClientInterface interface {
 	GetServers(backendName string) ([]Server, error)
 	CreateServer(backendName string, server *Server, version int) (*Server, error)
 	DeleteServer(backendName, serverName string, version int) error
+	
+	// Runtime server management
+	GetRuntimeServer(backendName, serverName string) (*RuntimeServer, error)
+	SetServerState(backendName, serverName, adminState string) error
+	DrainServer(backendName, serverName string) error
+	ReadyServer(backendName, serverName string) error
+	MaintainServer(backendName, serverName string) error
 }
