@@ -44,25 +44,15 @@ type Service struct {
 
 // ProcessServiceEvent processes a Nomad service event and updates HAProxy
 func ProcessServiceEvent(ctx context.Context, client haproxy.ClientInterface, event *ServiceEvent) (interface{}, error) {
-	return ProcessServiceEventWithDomainMap(ctx, client, event, nil)
-}
-
-// ProcessServiceEventWithDomainMap processes a Nomad service event and updates HAProxy and domain mapping
-func ProcessServiceEventWithDomainMap(
-	ctx context.Context,
-	client haproxy.ClientInterface,
-	event *ServiceEvent,
-	domainMapManager *DomainMapManager,
-) (interface{}, error) {
 	// Classify service based on tags
 	serviceType := classifyService(event.Service.Tags)
 	fmt.Printf("DEBUG: Service %s classified as %s with tags: %v\n", event.Service.ServiceName, serviceType, event.Service.Tags)
 
 	switch serviceType {
 	case haproxy.ServiceTypeDynamic:
-		return processDynamicServiceWithDomainMap(ctx, client, event, domainMapManager)
+		return processDynamicService(ctx, client, event)
 	case haproxy.ServiceTypeCustom:
-		return processCustomServiceWithDomainMap(ctx, client, event, domainMapManager)
+		return processCustomService(ctx, client, event)
 	case haproxy.ServiceTypeStatic:
 		// Static services - no action needed
 		return map[string]string{"status": "ignored", "reason": "static service"}, nil
@@ -167,18 +157,17 @@ func classifyService(tags []string) haproxy.ServiceType {
 	}
 }
 
-// processDynamicServiceWithDomainMap creates a new backend for the service and updates domain mapping
-func processDynamicServiceWithDomainMap(
+// processDynamicService creates a new backend for the service
+func processDynamicService(
 	ctx context.Context,
 	client haproxy.ClientInterface,
 	event *ServiceEvent,
-	domainMapManager *DomainMapManager,
 ) (interface{}, error) {
 	switch event.Type {
 	case "ServiceRegistration":
-		return handleServiceRegistrationWithDomainMap(ctx, client, event, domainMapManager)
+		return handleServiceRegistration(ctx, client, event)
 	case "ServiceDeregistration":
-		return handleServiceDeregistrationWithDomainMap(ctx, client, event, domainMapManager)
+		return handleServiceDeregistration(ctx, client, event)
 	default:
 		return map[string]string{"status": "skipped", "reason": "unknown event type"}, nil
 	}
@@ -197,17 +186,16 @@ func processDynamicServiceWithHealthCheckAndConfig(
 	case "ServiceRegistration":
 		return handleServiceRegistrationWithHealthCheck(ctx, client, nomadClient, event, logger)
 	case "ServiceDeregistration":
-		return handleServiceDeregistrationWithDrainTimeout(ctx, client, event, nil, drainTimeoutSec, logger)
+		return handleServiceDeregistrationWithDrainTimeout(ctx, client, event, drainTimeoutSec, logger)
 	default:
 		return map[string]string{"status": "skipped", "reason": "unknown event type"}, nil
 	}
 }
 
-func handleServiceRegistrationWithDomainMap(
+func handleServiceRegistration(
 	_ context.Context,
 	client haproxy.ClientInterface,
 	event *ServiceEvent,
-	domainMapManager *DomainMapManager,
 ) (interface{}, error) {
 	version, err := client.GetConfigVersion()
 	if err != nil {
@@ -239,11 +227,6 @@ func handleServiceRegistrationWithDomainMap(
 		result["status"] = "already_exists"
 	} else {
 		result["status"] = "created"
-	}
-
-	// ALWAYS reconcile domain mapping (regardless of server existence)
-	if domainMapManager != nil {
-		reconcileDomainMapFile(domainMapManager, event.Service.ServiceName, event.Service.Tags, result)
 	}
 
 	// ALWAYS reconcile frontend rules (regardless of server existence)
@@ -307,21 +290,6 @@ func ensureServer(client haproxy.ClientInterface, backendName, serverName, addre
 	return false, nil
 }
 
-// reconcileDomainMapFile updates the domain map file if configured
-func reconcileDomainMapFile(domainMapManager *DomainMapManager, serviceName string, tags []string, result map[string]string) {
-	domainMapping := parseDomainMapping(serviceName, tags)
-	if domainMapping == nil {
-		return
-	}
-
-	domainMapManager.AddMapping(domainMapping)
-	if err := domainMapManager.WriteToFile(); err != nil {
-		result["domain_map_warning"] = fmt.Sprintf("failed to update domain map: %v", err)
-	} else {
-		result["domain_mapping"] = fmt.Sprintf("%s -> %s", domainMapping.Domain, domainMapping.BackendName)
-	}
-}
-
 // reconcileFrontendRule ensures the frontend rule exists for domain-tagged services
 func reconcileFrontendRule(
 	client haproxy.ClientInterface,
@@ -361,20 +329,18 @@ func reconcileFrontendRule(
 	return nil
 }
 
-func handleServiceDeregistrationWithDomainMap(
+func handleServiceDeregistration(
 	ctx context.Context,
 	client haproxy.ClientInterface,
 	event *ServiceEvent,
-	domainMapManager *DomainMapManager,
 ) (interface{}, error) {
-	return handleServiceDeregistrationWithDrainTimeout(ctx, client, event, domainMapManager, config.DefaultDrainTimeoutSec, nil)
+	return handleServiceDeregistrationWithDrainTimeout(ctx, client, event, config.DefaultDrainTimeoutSec, nil)
 }
 
 func handleServiceDeregistrationWithDrainTimeout(
 	_ context.Context,
 	client haproxy.ClientInterface,
 	event *ServiceEvent,
-	domainMapManager *DomainMapManager,
 	drainTimeoutSec int,
 	logger *log.Logger,
 ) (interface{}, error) {
@@ -394,11 +360,6 @@ func handleServiceDeregistrationWithDrainTimeout(
 	// Check if this was the last server
 	existingServers, err := client.GetServers(backendName)
 	isLastServer := err == nil && len(existingServers) <= 1
-
-	// Handle domain mapping removal if this was the only instance
-	if domainMapManager != nil && isLastServer {
-		removeDomainMapFile(domainMapManager, event.Service.ServiceName, event.Service.Tags, result)
-	}
 
 	// Handle frontend rule removal if this was the only instance
 	if isLastServer {
@@ -474,21 +435,6 @@ func scheduleDelayedServerRemoval(
 	}
 }
 
-// removeDomainMapFile removes domain mapping from file if configured
-func removeDomainMapFile(domainMapManager *DomainMapManager, serviceName string, tags []string, result map[string]string) {
-	domainMapping := parseDomainMapping(serviceName, tags)
-	if domainMapping == nil {
-		return
-	}
-
-	domainMapManager.RemoveMapping(domainMapping.Domain)
-	if err := domainMapManager.WriteToFile(); err != nil {
-		result["domain_map_warning"] = fmt.Sprintf("failed to update domain map: %v", err)
-	} else {
-		result["domain_mapping_removed"] = domainMapping.Domain
-	}
-}
-
 // removeFrontendRule removes frontend rule when service has domain tags
 func removeFrontendRule(client haproxy.ClientInterface, serviceName string, tags []string, result map[string]string) {
 	domainMapping := parseDomainMapping(serviceName, tags)
@@ -504,12 +450,11 @@ func removeFrontendRule(client haproxy.ClientInterface, serviceName string, tags
 	}
 }
 
-// processCustomServiceWithDomainMap adds servers to existing backends and updates domain mapping
-func processCustomServiceWithDomainMap(
+// processCustomService adds servers to existing backends
+func processCustomService(
 	_ context.Context,
 	_ haproxy.ClientInterface,
 	_ *ServiceEvent,
-	_ *DomainMapManager,
 ) (interface{}, error) {
 	// TODO: Implement custom backend server management with domain mapping
 	return map[string]string{"status": "todo", "reason": "custom backend not implemented"}, nil

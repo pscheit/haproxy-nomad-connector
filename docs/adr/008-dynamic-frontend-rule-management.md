@@ -189,14 +189,41 @@ PUT /v3/services/haproxy/transactions/X
 - Mock client tracking for rule creation/removal verification
 - TDD approach with failing tests before implementation
 
+### Domain Map Removal
+✅ **Successfully Removed Domain Map File Management**
+- Removed `DomainMapManager` and all file-based domain mapping code
+- Removed `DomainMapConfig` from configuration structure
+- Removed `mapfile.go` and `mapfile_test.go` files entirely
+- Updated all service processing functions to remove domain map parameters
+- Frontend rules are now the sole mechanism for domain routing
+
+### Critical Bug Fix
+✅ **Fixed Kubernetes-Style Reconciliation Issue**
+- **Bug**: Services with existing servers didn't get frontend rules created
+- **Root Cause**: Early return with "already_exists" status skipped frontend rule creation
+- **Fix**: Implemented proper reconciliation pattern - always reconcile frontend rules regardless of server existence
+- **Test**: Added `TestProcessServiceEventWithDomainTag_ExistingServer_ShouldStillCreateFrontendRule` to prevent regression
+
 ### API Integration Pattern
 The implementation uses this proven pattern:
 ```go
-// Service registration with domain tag
+// Service registration with domain tag - ALWAYS reconcile
 domainMapping := parseDomainMapping(serviceName, tags)
 if domainMapping != nil {
-    err := client.AddFrontendRule("https", domainMapping.Domain, backendName)
-    // Handle frontend rule creation
+    // Check if rule already exists
+    existingRules, err := client.GetFrontendRules("https")
+    ruleExists := false
+    for _, rule := range existingRules {
+        if rule.Domain == domainMapping.Domain && rule.Backend == backendName {
+            ruleExists = true
+            break
+        }
+    }
+    
+    if !ruleExists {
+        err := client.AddFrontendRule("https", domainMapping.Domain, backendName)
+        // Handle frontend rule creation
+    }
 }
 
 // Service deregistration - only remove if last server

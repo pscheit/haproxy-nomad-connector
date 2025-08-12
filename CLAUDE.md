@@ -128,3 +128,4 @@ all acceptance criteria of the ADR/ticket are tested
 all tests pass
 its commited and pushed
 the CI passes green
+- before you commit, run make lint and verify that all tests are passing

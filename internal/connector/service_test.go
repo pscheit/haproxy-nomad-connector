@@ -258,8 +258,7 @@ func TestHandleServiceDeregistrationWithDrainTimeout_DrainSuccess(t *testing.T) 
 		context.Background(),
 		mockClient,
 		event,
-		nil, // no domain manager
-		2,   // 2 second drain timeout for test
+		2, // 2 second drain timeout for test
 		logger,
 	)
 
@@ -312,8 +311,7 @@ func TestHandleServiceDeregistrationWithDrainTimeout_DrainFails(t *testing.T) {
 		context.Background(),
 		mockClient,
 		event,
-		nil, // no domain manager
-		2,   // 2 second drain timeout for test
+		2, // 2 second drain timeout for test
 		logger,
 	)
 

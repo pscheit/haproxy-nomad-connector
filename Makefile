@@ -54,22 +54,26 @@ install: deps
 
 ## test: Run tests
 test: deps
-	$(GOTEST) -v -race ./...
+	$(GOTEST) -v -race ./cmd/... ./internal/...
+
+## test-integration: Run integration tests  
+test-integration: deps
+	$(GOTEST) -v -race -tags=integration ./e2e/...
 
 ## test-coverage: Run tests with coverage
 test-coverage: deps
-	$(GOTEST) -v -race -coverprofile=coverage.out -covermode=atomic ./...
+	$(GOTEST) -v -race -coverprofile=coverage.out -covermode=atomic ./cmd/... ./internal/...
 	$(GOCMD) tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report generated: coverage.html"
 
 ## bench: Run benchmarks
 bench: deps
-	$(GOTEST) -bench=. -benchmem ./...
+	$(GOTEST) -bench=. -benchmem ./cmd/... ./internal/...
 
 ## lint: Run linter
 lint:
 	@if command -v golangci-lint >/dev/null 2>&1; then \
-		golangci-lint run ./cmd/... ./internal/... ./test/... ./e2e/...; \
+		golangci-lint run ./cmd/... ./internal/... ./e2e/...; \
 	else \
 		echo "golangci-lint not installed. Install with: https://golangci-lint.run/docs/welcome/install/#binaries"; \
 		exit 1; \
