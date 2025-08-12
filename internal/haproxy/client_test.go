@@ -613,5 +613,4 @@ func TestClient_AddFrontendRule_RegexDomain(t *testing.T) {
 	if capturedACLName != expectedFixedACLName {
 		t.Errorf("Expected fixed ACL name %s, got %s", expectedFixedACLName, capturedACLName)
 	}
-
 }
