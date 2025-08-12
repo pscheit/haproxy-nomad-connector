@@ -118,6 +118,16 @@ Environment variables or JSON config file:
 
 The haproxy address needs to be the endpoint of your Data plane API. Look at the official docs how to run it.
 
+**Quick Data Plane API setup:**
+```bash
+# Add to your haproxy.cfg
+userlist haproxy-dataplaneapi
+    user admin insecure-password adminpwd
+
+program api
+    command dataplaneapi --host 0.0.0.0 --port 5555 --haproxy-bin /usr/sbin/haproxy --config-file /etc/haproxy/haproxy.cfg --reload-cmd "systemctl reload haproxy" --reload-delay 5 --userlist haproxy-dataplaneapi
+```
+
 ### Benefits
 
 - ✅ **Zero manual map file editing**
