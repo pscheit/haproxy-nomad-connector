@@ -1,10 +1,11 @@
 //go:build integration
 // +build integration
 
-package test
+package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -152,5 +153,72 @@ func TestE2E_ServiceLifecycle(t *testing.T) {
 		}
 
 		t.Logf("Service lifecycle test result: %+v", result)
+	})
+
+	t.Run("ServiceWithRegexDomain", func(t *testing.T) {
+		// Create HAProxy client
+		client := haproxy.NewClient("http://localhost:5555", "admin", "adminpwd")
+
+		// Create service registration event with regex domain (production case)
+		serviceEvent := connector.ServiceEvent{
+			Type: "ServiceRegistration",
+			Service: connector.Service{
+				ServiceName: "ps-webforge",
+				Address:     "192.168.1.200",
+				Port:        80,
+				Tags: []string{
+					"haproxy.enable=true",
+					"haproxy.domain=^(www\\.)?ps-webforge\\.com$",
+					"haproxy.domain.type=regex",
+					"haproxy.backend=dynamic",
+				},
+			},
+		}
+
+		// Process event through connector - this should NOT fail with ACL name errors
+		result, err := connector.ProcessServiceEvent(ctx, client, &serviceEvent)
+		if err != nil {
+			// Check if the error is the original ACL name bug
+			if strings.Contains(err.Error(), "character '^' is not permitted in acl name") {
+				t.Fatalf("ACL name bug still exists: %v", err)
+			}
+			// Other errors might be expected (like missing frontend config)
+			t.Logf("Expected error (not ACL bug): %v", err)
+		}
+
+		// Verify backend was created (connector should sanitize service name)
+		backends, err := client.GetBackends()
+		if err != nil {
+			t.Fatalf("Failed to get backends: %v", err)
+		}
+
+		// Should have created backend with sanitized name
+		backendFound := false
+		for _, backend := range backends {
+			if backend.Name == "ps_webforge" { // sanitized service name
+				backendFound = true
+				t.Logf("✅ Backend created: %s", backend.Name)
+				break
+			}
+		}
+		if !backendFound {
+			t.Error("Expected backend 'ps_webforge' was not created")
+		}
+
+		// Try to verify frontend rules (if supported)
+		rules, err := client.GetFrontendRules("https")
+		if err != nil {
+			t.Logf("Could not get frontend rules (might not be configured): %v", err)
+		} else {
+			// Look for our regex domain rule
+			for _, rule := range rules {
+				if rule.Domain == "^(www\\.)?ps-webforge\\.com$" && rule.Backend == "ps_webforge" {
+					t.Logf("✅ Frontend rule created: %s -> %s", rule.Domain, rule.Backend)
+					break
+				}
+			}
+		}
+
+		t.Logf("Regex domain service test result: %+v", result)
 	})
 }

@@ -383,8 +383,8 @@ func (c *Client) setFrontendRulesInTransaction(frontend string, rules []Frontend
 	var backendRules []map[string]interface{}
 
 	for _, rule := range rules {
-		// Generate ACL name from domain
-		aclName := fmt.Sprintf("is_%s", strings.ReplaceAll(strings.ReplaceAll(rule.Domain, ".", "_"), "-", "_"))
+		// Generate ACL name from backend name (safe for HAProxy)
+		aclName := fmt.Sprintf("is_%s", strings.ReplaceAll(rule.Backend, "-", "_"))
 
 		// Add ACL
 		acls = append(acls, map[string]interface{}{

@@ -516,3 +516,102 @@ func TestClient_GetFrontendRules(t *testing.T) {
 		}
 	}
 }
+
+func TestClient_AddFrontendRule_RegexDomain(t *testing.T) {
+	// This test verifies that ACL names are generated from backend names, not domain patterns
+	// The fix should use backend name to create valid ACL names
+	var capturedACLName string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == HTTPMethodGET && strings.Contains(r.URL.Path, "/configuration/version"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("12"))
+
+		case r.Method == HTTPMethodPOST && strings.Contains(r.URL.Path, "/transactions"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			response := map[string]interface{}{
+				"id":       "test-tx-regex",
+				"status":   "in_progress",
+				"_version": 1,
+			}
+			_ = json.NewEncoder(w).Encode(response)
+
+		case r.Method == HTTPMethodPUT && strings.Contains(r.URL.Path, "/frontends/https/acls"):
+			// Capture the ACL being set to verify the bug
+			var acls []map[string]interface{}
+			err := json.NewDecoder(r.Body).Decode(&acls)
+			if err != nil {
+				t.Errorf("Failed to decode ACL request: %v", err)
+				return
+			}
+			if len(acls) > 0 {
+				if name, ok := acls[0]["acl_name"].(string); ok {
+					capturedACLName = name
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(acls)
+
+		case r.Method == HTTPMethodPUT && strings.Contains(r.URL.Path, "/frontends/https/backend_switching_rules"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			response := []map[string]interface{}{
+				{
+					"cond":      "if",
+					"cond_test": capturedACLName,
+					"name":      "ps_webforge",
+				},
+			}
+			_ = json.NewEncoder(w).Encode(response)
+
+		case r.Method == HTTPMethodGET && strings.Contains(r.URL.Path, "/frontends/https/acls"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]interface{}{})
+
+		case r.Method == HTTPMethodGET && strings.Contains(r.URL.Path, "/frontends/https/backend_switching_rules"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]interface{}{})
+
+		case r.Method == HTTPMethodPUT && strings.Contains(r.URL.Path, "/transactions/test-tx-regex"):
+			// With the fix, this should now succeed
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			response := map[string]interface{}{
+				"id":     "test-tx-regex",
+				"status": "success",
+			}
+			_ = json.NewEncoder(w).Encode(response)
+
+		default:
+			t.Errorf("Unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "admin", "password")
+
+	// Test with regex domain pattern that causes the production bug
+	regexDomain := "^(www\\.)?ps-webforge\\.com$"
+	backend := "ps_webforge"
+
+	err := client.AddFrontendRule("https", regexDomain, backend)
+
+	// The test should succeed with the fix
+	if err != nil {
+		t.Errorf("Expected success with fixed ACL name, but got error: %v", err)
+	}
+
+	// Verify that the ACL name is now based on backend name (the fix)
+	expectedFixedACLName := "is_ps_webforge"
+	if capturedACLName != expectedFixedACLName {
+		t.Errorf("Expected fixed ACL name %s, got %s", expectedFixedACLName, capturedACLName)
+	}
+
+}

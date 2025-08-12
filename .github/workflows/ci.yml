@@ -221,6 +221,9 @@ jobs:
       run: |
         echo "Running HAProxy DataPlane API integration tests..."
         go run e2e/test_frontend_rules.go
+        
+        echo "Running regex domain service registration e2e test..."
+        go run e2e/test_service_regex_domain.go
     
     - name: Show HAProxy logs on failure
       if: failure()
