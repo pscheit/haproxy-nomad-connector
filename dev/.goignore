@@ -1,0 +1,2 @@
+// This directory is excluded from Go tooling
+// Contains development/runtime files, not Go source code

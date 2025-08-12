@@ -73,7 +73,7 @@ bench: deps
 ## lint: Run linter
 lint:
 	@if command -v golangci-lint >/dev/null 2>&1; then \
-		golangci-lint run ./cmd/... ./internal/... ./e2e/...; \
+		golangci-lint run ./...; \
 	else \
 		echo "golangci-lint not installed. Install with: https://golangci-lint.run/docs/welcome/install/#binaries"; \
 		exit 1; \
@@ -81,7 +81,7 @@ lint:
 
 ## fmt: Format code
 fmt:
-	$(GOFMT) -s -w .
+	$(GOFMT) -s -w $$(find . -name '*.go' -not -path './dev/*' 2>/dev/null)
 
 ## vet: Run go vet
 vet: deps

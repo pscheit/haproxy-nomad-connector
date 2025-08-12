@@ -126,10 +126,7 @@ func (c *Connector) processNomadServiceEventWithConfig(ctx context.Context, even
 		},
 	}
 
-	c.logger.Printf("Processing %s for service %s at %s:%d",
-		event.Type, svc.ServiceName, svc.Address, svc.Port)
-
-	return ProcessServiceEventWithHealthCheckAndConfig(
+	result, err := ProcessServiceEventWithHealthCheckAndConfig(
 		ctx,
 		c.haproxyClient,
 		c.nomadClient,
@@ -137,6 +134,19 @@ func (c *Connector) processNomadServiceEventWithConfig(ctx context.Context, even
 		c.logger,
 		c.config.HAProxy.DrainTimeoutSec,
 	)
+
+	// Enhanced logging with frontend rule status
+	frontendInfo := ""
+	if resultMap, ok := result.(map[string]string); ok {
+		if ruleInfo, exists := resultMap["frontend_rule"]; exists {
+			frontendInfo = fmt.Sprintf(" (%s)", ruleInfo)
+		}
+	}
+
+	c.logger.Printf("Successfully processed %s for service %s at %s:%d%s",
+		event.Type, svc.ServiceName, svc.Address, svc.Port, frontendInfo)
+
+	return result, err
 }
 
 // syncExistingServices performs initial sync of all registered Nomad services

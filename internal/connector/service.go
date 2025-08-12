@@ -509,17 +509,26 @@ func handleServiceRegistrationWithHealthCheck(
 
 	for _, existingServer := range existingServers {
 		if existingServer.Name == serverName {
-			return map[string]string{
+			// Initialize result map for existing server
+			result := map[string]string{
 				"status":  "already_exists",
 				"backend": backendName,
 				"server":  serverName,
-			}, nil
+			}
+
+			// ALWAYS reconcile frontend rules (regardless of server existence)
+			reconcileErr := reconcileFrontendRule(client, event.Service.ServiceName, event.Service.Tags, backendName, result)
+			if reconcileErr != nil {
+				return nil, reconcileErr
+			}
+
+			return result, nil
 		}
 	}
 
 	// Try to fetch health check configuration from Nomad
 	var serviceCheck *nomad.ServiceCheck
-	if event.Service.JobID != "" {
+	if event.Service.JobID != "" && nomadClient != nil {
 		serviceCheck, err = nomadClient.GetServiceCheckFromJob(event.Service.JobID, event.Service.ServiceName)
 		if err != nil {
 			logger.Printf("Warning: Failed to get health check from Nomad for service %s in job %s: %v",
@@ -536,12 +545,20 @@ func handleServiceRegistrationWithHealthCheck(
 		return nil, fmt.Errorf("failed to create server %s in backend %s: %w", serverName, backendName, err)
 	}
 
-	return map[string]string{
+	// Initialize result map
+	result := map[string]string{
 		"status":     StatusCreated,
 		"backend":    backendName,
 		"server":     serverName,
 		"check_type": server.CheckType,
-	}, nil
+	}
+
+	// ALWAYS reconcile frontend rules (regardless of server existence)
+	if err := reconcileFrontendRule(client, event.Service.ServiceName, event.Service.Tags, backendName, result); err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }
 
 // createServerWithHealthCheck creates a server with appropriate health check configuration

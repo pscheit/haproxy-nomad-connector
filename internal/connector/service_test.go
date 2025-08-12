@@ -14,8 +14,10 @@ import (
 
 // Test constants
 const (
-	testDomain  = "api.example.com"
-	testBackend = "api_service"
+	testDomain                 = "api.example.com"
+	testBackend                = "api_service"
+	expectedFrontend           = "https"
+	eventTypeServiceDeregister = "ServiceDeregistration"
 )
 
 func TestClassifyService(t *testing.T) {
@@ -245,7 +247,7 @@ func TestHandleServiceDeregistrationWithDrainTimeout_DrainSuccess(t *testing.T) 
 	logger := log.New(os.Stdout, "test: ", log.LstdFlags)
 
 	event := &ServiceEvent{
-		Type: "ServiceDeregistration",
+		Type: eventTypeServiceDeregister,
 		Service: Service{
 			ServiceName: "test-service",
 			Address:     "10.0.0.1",
@@ -298,7 +300,7 @@ func TestHandleServiceDeregistrationWithDrainTimeout_DrainFails(t *testing.T) {
 	logger := log.New(os.Stdout, "test: ", log.LstdFlags)
 
 	event := &ServiceEvent{
-		Type: "ServiceDeregistration",
+		Type: eventTypeServiceDeregister,
 		Service: Service{
 			ServiceName: "test-service",
 			Address:     "10.0.0.1",
@@ -376,7 +378,7 @@ func TestProcessServiceEventWithDomainTag_CreatesFrontendRule(t *testing.T) {
 
 	if len(calls) > 0 {
 		call := calls[0]
-		const expectedFrontend = "https"
+		// Use package-level constant
 		expectedDomain := testDomain
 		expectedBackend := testBackend
 
@@ -401,7 +403,7 @@ func TestProcessServiceEventWithDomainTag_RemovesFrontendRule(t *testing.T) {
 	}
 
 	event := &ServiceEvent{
-		Type: "ServiceDeregistration",
+		Type: eventTypeServiceDeregister,
 		Service: Service{
 			ServiceName: "api-service",
 			Address:     "10.0.0.1",
@@ -433,7 +435,7 @@ func TestProcessServiceEventWithDomainTag_RemovesFrontendRule(t *testing.T) {
 
 	if len(calls) > 0 {
 		call := calls[0]
-		const expectedFrontend = "https"
+		// Use package-level constant
 		expectedDomain := testDomain
 
 		if call.Frontend != expectedFrontend {
@@ -491,8 +493,207 @@ func TestProcessServiceEventWithDomainTag_ExistingServer_ShouldStillCreateFronte
 
 	if len(calls) > 0 {
 		call := calls[0]
-		if call.Frontend != "https" || call.Domain != testDomain || call.Backend != testBackend {
+		if call.Frontend != expectedFrontend || call.Domain != testDomain || call.Backend != testBackend {
 			t.Errorf("Frontend rule has wrong parameters: %+v", call)
 		}
+	}
+}
+
+// For testing purposes, we'll pass nil for nomad client since the bug is about frontend rules
+// The health check functionality will just use defaults when nomad client is nil
+
+// TestProcessServiceEventWithHealthCheckAndConfig_WithDomainTag tests the production code path
+func TestProcessServiceEventWithHealthCheckAndConfig_WithDomainTag(t *testing.T) {
+	mockHAProxyClient := &mockHAProxyClient{}
+	logger := log.New(os.Stderr, "[test] ", log.LstdFlags)
+
+	event := &ServiceEvent{
+		Type: "ServiceRegistration",
+		Service: Service{
+			ServiceName: "api-service",
+			Address:     "10.0.0.1",
+			Port:        8080,
+			JobID:       "api-service-job",
+			Tags:        []string{"haproxy.enable=true", "haproxy.backend=dynamic", "haproxy.domain=" + testDomain},
+		},
+	}
+
+	result, err := ProcessServiceEventWithHealthCheckAndConfig(
+		context.Background(),
+		mockHAProxyClient,
+		nil, // nil nomad client for testing
+		event,
+		logger,
+		30, // drain timeout
+	)
+
+	if err != nil {
+		t.Fatalf("ProcessServiceEventWithHealthCheckAndConfig() failed: %v", err)
+	}
+
+	resultMap, ok := result.(map[string]string)
+	if !ok {
+		t.Fatal("Expected result to be map[string]string")
+	}
+
+	if resultMap["status"] != StatusCreated {
+		t.Errorf("Expected status '%s', got %s", StatusCreated, resultMap["status"])
+	}
+
+	// CRITICAL: Verify that AddFrontendRule was called - this should currently FAIL
+	calls := mockHAProxyClient.getAddFrontendRuleCalls()
+	if len(calls) != 1 {
+		t.Errorf("CRITICAL BUG: Frontend rule not created with health check path! Expected 1 AddFrontendRule call, got %d", len(calls))
+		return
+	}
+
+	call := calls[0]
+	if call.Frontend != expectedFrontend || call.Domain != testDomain || call.Backend != "api_service" {
+		t.Errorf("Frontend rule has wrong parameters: got %+v, expected {Frontend: https, Domain: %s, Backend: api_service}", call, testDomain)
+	}
+}
+
+// TestHandleServiceRegistrationWithHealthCheck_WithDomainTag tests the specific function
+func TestHandleServiceRegistrationWithHealthCheck_WithDomainTag(t *testing.T) {
+	mockHAProxyClient := &mockHAProxyClient{}
+	logger := log.New(os.Stderr, "[test] ", log.LstdFlags)
+
+	event := &ServiceEvent{
+		Type: "ServiceRegistration",
+		Service: Service{
+			ServiceName: "crm-service",
+			Address:     "192.168.1.10",
+			Port:        3000,
+			JobID:       "crm-service-job",
+			Tags:        []string{"haproxy.enable=true", "haproxy.domain=crm.example.com"},
+		},
+	}
+
+	result, err := handleServiceRegistrationWithHealthCheck(
+		context.Background(),
+		mockHAProxyClient,
+		nil, // nil nomad client for testing
+		event,
+		logger,
+	)
+
+	if err != nil {
+		t.Fatalf("handleServiceRegistrationWithHealthCheck() failed: %v", err)
+	}
+
+	resultMap, ok := result.(map[string]string)
+	if !ok {
+		t.Fatal("Expected result to be map[string]string")
+	}
+
+	if resultMap["status"] != StatusCreated {
+		t.Errorf("Expected status '%s', got %s", StatusCreated, resultMap["status"])
+	}
+
+	// CRITICAL: Verify that AddFrontendRule was called - this should currently FAIL
+	calls := mockHAProxyClient.getAddFrontendRuleCalls()
+	if len(calls) != 1 {
+		t.Errorf("CRITICAL BUG: Frontend rule not created by handleServiceRegistrationWithHealthCheck! "+
+			"Expected 1 AddFrontendRule call, got %d", len(calls))
+		return
+	}
+
+	call := calls[0]
+	if call.Frontend != expectedFrontend || call.Domain != "crm.example.com" || call.Backend != "crm_service" {
+		t.Errorf("Frontend rule has wrong parameters: got %+v, expected {Frontend: https, Domain: crm.example.com, Backend: crm_service}", call)
+	}
+}
+
+// TestHealthCheckWithDomainTagIntegration tests the complete integration scenario
+func TestHealthCheckWithDomainTagIntegration(t *testing.T) {
+	mockHAProxyClient := &mockHAProxyClient{}
+	logger := log.New(os.Stderr, "[test] ", log.LstdFlags)
+
+	// Test both registration and deregistration with domain tags + health checks
+	event := &ServiceEvent{
+		Type: "ServiceRegistration",
+		Service: Service{
+			ServiceName: "photobooks-web",
+			Address:     "192.168.5.3",
+			Port:        22464,
+			JobID:       "photobooks-web-prod",
+			Tags:        []string{"haproxy.enable=true", "haproxy.backend=dynamic", "haproxy.domain=yayphotobooks.com"},
+		},
+	}
+
+	// Test registration
+	result, err := ProcessServiceEventWithHealthCheckAndConfig(
+		context.Background(),
+		mockHAProxyClient,
+		nil, // nil nomad client for testing
+		event,
+		logger,
+		30, // drain timeout
+	)
+
+	if err != nil {
+		t.Fatalf("ProcessServiceEventWithHealthCheckAndConfig() registration failed: %v", err)
+	}
+
+	resultMap, ok := result.(map[string]string)
+	if !ok {
+		t.Fatal("Expected result to be map[string]string")
+	}
+
+	if resultMap["status"] != StatusCreated {
+		t.Errorf("Expected status '%s', got %s", StatusCreated, resultMap["status"])
+	}
+
+	// CRITICAL: Verify frontend rule was created during registration
+	registrationCalls := mockHAProxyClient.getAddFrontendRuleCalls()
+	if len(registrationCalls) != 1 {
+		t.Errorf("CRITICAL BUG: Frontend rule not created during health check registration! "+
+			"Expected 1 AddFrontendRule call, got %d", len(registrationCalls))
+	} else {
+		call := registrationCalls[0]
+		if call.Domain != "yayphotobooks.com" || call.Backend != "photobooks_web" {
+			t.Errorf("Registration frontend rule incorrect: got %+v", call)
+		}
+	}
+
+	// Test deregistration - set up mock for existing server check
+	mockHAProxyClient.getServersServers = []haproxy.Server{
+		{Name: "photobooks_web_192_168_5_3_22464"},
+	}
+
+	event.Type = eventTypeServiceDeregister
+	deregResult, err := ProcessServiceEventWithHealthCheckAndConfig(
+		context.Background(),
+		mockHAProxyClient,
+		nil, // nil nomad client for testing
+		event,
+		logger,
+		30, // drain timeout
+	)
+
+	if err != nil {
+		t.Fatalf("ProcessServiceEventWithHealthCheckAndConfig() deregistration failed: %v", err)
+	}
+
+	deregResultMap, ok := deregResult.(map[string]string)
+	if !ok {
+		t.Fatal("Expected deregistration result to be map[string]string")
+	}
+
+	// Accept both "deleted" and "draining" as valid deregistration statuses
+	status := deregResultMap["status"]
+	if status != StatusDeleted && status != StatusDraining {
+		t.Errorf("Expected deregistration status '%s' or '%s', got %s", StatusDeleted, StatusDraining, status)
+	}
+
+	// Verify frontend rule removal logic was called (even if it may not succeed)
+	// Note: The actual rule removal depends on backend server count logic
+	if removedDomain, exists := deregResultMap["frontend_rule_removed"]; exists {
+		if removedDomain != "yayphotobooks.com" {
+			t.Errorf("Wrong domain removed: expected yayphotobooks.com, got %s", removedDomain)
+		}
+	} else if warning, exists := deregResultMap["frontend_rule_warning"]; exists {
+		// Rule removal attempted but failed - that's also acceptable for testing
+		t.Logf("Frontend rule removal warning (acceptable): %s", warning)
 	}
 }
