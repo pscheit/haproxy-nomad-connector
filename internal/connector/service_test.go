@@ -440,3 +440,55 @@ func TestProcessServiceEventWithDomainTag_RemovesFrontendRule(t *testing.T) {
 		}
 	}
 }
+
+func TestProcessServiceEventWithDomainTag_ExistingServer_ShouldStillCreateFrontendRule(t *testing.T) {
+	// This test simulates the production bug where servers already exist in HAProxy
+	// (either added manually or from a previous connector run without domain support)
+	// and verifies that frontend rules are STILL created even when server already exists
+	
+	mockClient := &mockHAProxyClient{
+		// Simulate that the server already exists in the backend
+		getServersServers: []haproxy.Server{
+			{Name: "api_service_10_0_0_1_8080", Address: "10.0.0.1", Port: 8080},
+		},
+	}
+	
+	event := &ServiceEvent{
+		Type: "ServiceRegistration",
+		Service: Service{
+			ServiceName: "api-service",
+			Address:     "10.0.0.1",
+			Port:        8080,
+			Tags:        []string{"haproxy.enable=true", "haproxy.domain=api.example.com"},
+		},
+	}
+
+	result, err := ProcessServiceEvent(context.Background(), mockClient, event)
+	if err != nil {
+		t.Fatalf("ProcessServiceEvent() failed: %v", err)
+	}
+
+	resultMap, ok := result.(map[string]string)
+	if !ok {
+		t.Fatal("Expected result to be map[string]string")
+	}
+
+	// Server already exists, so status should be "already_exists"
+	if resultMap["status"] != "already_exists" {
+		t.Errorf("Expected status 'already_exists', got %s", resultMap["status"])
+	}
+
+	// BUT frontend rule should STILL be created!
+	calls := mockClient.getAddFrontendRuleCalls()
+	if len(calls) != 1 {
+		t.Errorf("CRITICAL BUG: Frontend rule not created for existing server! Expected 1 AddFrontendRule call, got %d", len(calls))
+		t.Error("This is the production bug - when servers already exist, frontend rules are NOT created!")
+	}
+	
+	if len(calls) > 0 {
+		call := calls[0]
+		if call.Frontend != "https" || call.Domain != "api.example.com" || call.Backend != "api_service" {
+			t.Errorf("Frontend rule has wrong parameters: %+v", call)
+		}
+	}
+}

@@ -243,46 +243,49 @@ func handleServiceRegistrationWithDomainMap(
 
 	serverName := generateServerName(event.Service.ServiceName, event.Service.Address, event.Service.Port)
 
+	// Initialize result map
+	result := map[string]string{
+		"backend": backendName,
+		"server":  serverName,
+	}
+
+	// Check if server already exists
 	existingServers, err := client.GetServers(backendName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get existing servers for backend %s: %w", backendName, err)
 	}
 
+	serverExists := false
 	for _, existingServer := range existingServers {
 		if existingServer.Name == serverName {
-			return map[string]string{
-				"status":  "already_exists",
-				"backend": backendName,
-				"server":  serverName,
-			}, nil
+			serverExists = true
+			result["status"] = "already_exists"
+			break
 		}
 	}
 
-	server := haproxy.Server{
-		Name:    serverName,
-		Address: event.Service.Address,
-		Port:    event.Service.Port,
-		Check:   "enabled", // Default - will be updated by health check logic
+	// Create server if it doesn't exist
+	if !serverExists {
+		server := haproxy.Server{
+			Name:    serverName,
+			Address: event.Service.Address,
+			Port:    event.Service.Port,
+			Check:   "enabled", // Default - will be updated by health check logic
+		}
+
+		_, err = client.CreateServer(backendName, &server, version)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create server %s in backend %s: %w", serverName, backendName, err)
+		}
+		result["status"] = "created"
 	}
 
-	_, err = client.CreateServer(backendName, &server, version)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create server %s in backend %s: %w", serverName, backendName, err)
-	}
-
-	result := map[string]string{
-		"status":  "created",
-		"backend": backendName,
-		"server":  server.Name,
-	}
-
-	// Handle domain mapping if manager is provided and service has domain tags
+	// ALWAYS reconcile domain mapping (regardless of server existence)
 	if domainMapManager != nil {
 		domainMapping := parseDomainMapping(event.Service.ServiceName, event.Service.Tags)
 		if domainMapping != nil {
 			domainMapManager.AddMapping(domainMapping)
 			if err := domainMapManager.WriteToFile(); err != nil {
-				// Log error but don't fail the entire operation
 				result["domain_map_warning"] = fmt.Sprintf("failed to update domain map: %v", err)
 			} else {
 				result["domain_mapping"] = fmt.Sprintf("%s -> %s", domainMapping.Domain, domainMapping.BackendName)
@@ -290,16 +293,36 @@ func handleServiceRegistrationWithDomainMap(
 		}
 	}
 
-	// Handle frontend rule creation for domain tags
+	// ALWAYS reconcile frontend rules (regardless of server existence)
 	domainMapping := parseDomainMapping(event.Service.ServiceName, event.Service.Tags)
 	if domainMapping != nil {
-		fmt.Printf("DEBUG: Creating frontend rule for service %s: %s -> %s\n", event.Service.ServiceName, domainMapping.Domain, backendName)
-		err := client.AddFrontendRule("https", domainMapping.Domain, backendName)
+		fmt.Printf("DEBUG: Reconciling frontend rule for service %s: %s -> %s\n", event.Service.ServiceName, domainMapping.Domain, backendName)
+		
+		// Check if rule already exists
+		existingRules, err := client.GetFrontendRules("https")
 		if err != nil {
-			return nil, fmt.Errorf("failed to create frontend rule for domain %s: %w", domainMapping.Domain, err)
+			fmt.Printf("DEBUG: Failed to get existing rules: %v\n", err)
 		}
-		result["frontend_rule"] = fmt.Sprintf("added rule: %s -> %s", domainMapping.Domain, backendName)
-		fmt.Printf("DEBUG: Successfully created frontend rule: %s -> %s\n", domainMapping.Domain, backendName)
+		
+		ruleExists := false
+		for _, rule := range existingRules {
+			if rule.Domain == domainMapping.Domain && rule.Backend == backendName {
+				ruleExists = true
+				break
+			}
+		}
+		
+		if !ruleExists {
+			err := client.AddFrontendRule("https", domainMapping.Domain, backendName)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create frontend rule for domain %s: %w", domainMapping.Domain, err)
+			}
+			result["frontend_rule"] = fmt.Sprintf("added rule: %s -> %s", domainMapping.Domain, backendName)
+			fmt.Printf("DEBUG: Successfully created frontend rule: %s -> %s\n", domainMapping.Domain, backendName)
+		} else {
+			result["frontend_rule"] = fmt.Sprintf("rule exists: %s -> %s", domainMapping.Domain, backendName)
+			fmt.Printf("DEBUG: Frontend rule already exists: %s -> %s\n", domainMapping.Domain, backendName)
+		}
 	} else {
 		fmt.Printf("DEBUG: No domain mapping found for service %s with tags: %v\n", event.Service.ServiceName, event.Service.Tags)
 	}
