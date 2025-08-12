@@ -297,13 +297,13 @@ func handleServiceRegistrationWithDomainMap(
 	domainMapping := parseDomainMapping(event.Service.ServiceName, event.Service.Tags)
 	if domainMapping != nil {
 		fmt.Printf("DEBUG: Reconciling frontend rule for service %s: %s -> %s\n", event.Service.ServiceName, domainMapping.Domain, backendName)
-		
+
 		// Check if rule already exists
 		existingRules, err := client.GetFrontendRules("https")
 		if err != nil {
 			fmt.Printf("DEBUG: Failed to get existing rules: %v\n", err)
 		}
-		
+
 		ruleExists := false
 		for _, rule := range existingRules {
 			if rule.Domain == domainMapping.Domain && rule.Backend == backendName {
@@ -311,7 +311,7 @@ func handleServiceRegistrationWithDomainMap(
 				break
 			}
 		}
-		
+
 		if !ruleExists {
 			err := client.AddFrontendRule("https", domainMapping.Domain, backendName)
 			if err != nil {

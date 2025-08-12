@@ -193,12 +193,12 @@ func (c *Connector) processEvent(ctx context.Context, event nomad.ServiceEvent) 
 	// Log successful processing
 	if resultMap, ok := result.(map[string]string); ok {
 		var logDetails []string
-		
+
 		// Add status
 		if status := resultMap["status"]; status != "" {
 			logDetails = append(logDetails, "status="+status)
 		}
-		
+
 		// Add frontend rule info if present
 		if frontendRule := resultMap["frontend_rule"]; frontendRule != "" {
 			logDetails = append(logDetails, "frontend_rule=true")
@@ -206,17 +206,17 @@ func (c *Connector) processEvent(ctx context.Context, event nomad.ServiceEvent) 
 		if frontendRuleRemoved := resultMap["frontend_rule_removed"]; frontendRuleRemoved != "" {
 			logDetails = append(logDetails, "frontend_rule_removed="+frontendRuleRemoved)
 		}
-		
+
 		// Add backend info if present
 		if backend := resultMap["backend"]; backend != "" {
 			logDetails = append(logDetails, "backend="+backend)
 		}
-		
-		// Add server info if present  
+
+		// Add server info if present
 		if server := resultMap["server"]; server != "" {
 			logDetails = append(logDetails, "server="+server)
 		}
-		
+
 		// Add domain mapping info if present
 		if domainMapping := resultMap["domain_mapping"]; domainMapping != "" {
 			logDetails = append(logDetails, "domain_mapped=true")
@@ -224,7 +224,7 @@ func (c *Connector) processEvent(ctx context.Context, event nomad.ServiceEvent) 
 		if domainMappingRemoved := resultMap["domain_mapping_removed"]; domainMappingRemoved != "" {
 			logDetails = append(logDetails, "domain_mapping_removed="+domainMappingRemoved)
 		}
-		
+
 		detailsStr := strings.Join(logDetails, ", ")
 		c.logger.Printf("Successfully processed %s for service %s (%s)",
 			event.Type, event.Payload.Service.ServiceName, detailsStr)
