@@ -359,7 +359,7 @@ func (c *Client) getFrontendRulesInTransaction(frontend, transactionID string) (
 	for _, rule := range rules {
 		condTest, _ := rule["cond_test"].(string)
 		backendName, _ := rule["name"].(string)
-		
+
 		// Find matching ACL
 		for _, acl := range acls {
 			aclName, _ := acl["acl_name"].(string)
@@ -385,7 +385,7 @@ func (c *Client) setFrontendRulesInTransaction(frontend string, rules []Frontend
 	for _, rule := range rules {
 		// Generate ACL name from domain
 		aclName := fmt.Sprintf("is_%s", strings.ReplaceAll(strings.ReplaceAll(rule.Domain, ".", "_"), "-", "_"))
-		
+
 		// Add ACL
 		acls = append(acls, map[string]interface{}{
 			"acl_name":  aclName,
@@ -408,7 +408,8 @@ func (c *Client) setFrontendRulesInTransaction(frontend string, rules []Frontend
 	}
 
 	// Update backend switching rules
-	rulePath := fmt.Sprintf("/v3/services/haproxy/configuration/frontends/%s/backend_switching_rules?transaction_id=%s", frontend, transactionID)
+	rulePath := fmt.Sprintf("/v3/services/haproxy/configuration/frontends/%s/backend_switching_rules?transaction_id=%s",
+		frontend, transactionID)
 	if err := c.makeRequest(HTTPMethodPUT, rulePath, backendRules, nil, 0); err != nil {
 		return fmt.Errorf("failed to update backend switching rules: %w", err)
 	}

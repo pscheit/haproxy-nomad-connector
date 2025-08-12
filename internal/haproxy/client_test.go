@@ -12,7 +12,7 @@ func TestClient_CreateBackend(t *testing.T) {
 	// Mock server that simulates Data Plane API
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Verify request
-		if r.Method != "POST" {
+		if r.Method != HTTPMethodPOST {
 			t.Errorf("Expected POST, got %s", r.Method)
 		}
 		if !strings.Contains(r.URL.Path, "/backends") {
@@ -62,7 +62,7 @@ func TestClient_CreateBackend(t *testing.T) {
 func TestClient_GetBackends(t *testing.T) {
 	// Mock server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "GET" {
+		if r.Method != HTTPMethodGET {
 			t.Errorf("Expected GET, got %s", r.Method)
 		}
 
@@ -206,7 +206,7 @@ func TestClient_GetRuntimeServer(t *testing.T) {
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "GET" {
+		if r.Method != HTTPMethodGET {
 			t.Errorf("Expected GET, got %s", r.Method)
 		}
 		if !strings.Contains(r.URL.Path, "/runtime/backends/test-backend/servers/server1") {
@@ -241,13 +241,13 @@ func TestClient_AddFrontendRule(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == "GET" && strings.Contains(r.URL.Path, "/configuration/version"):
+		case r.Method == HTTPMethodGET && strings.Contains(r.URL.Path, "/configuration/version"):
 			// Mock version endpoint
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("12"))
 
-		case r.Method == "POST" && strings.Contains(r.URL.Path, "/transactions"):
+		case r.Method == HTTPMethodPOST && strings.Contains(r.URL.Path, "/transactions"):
 			// Create transaction
 			transactionCreated = true
 			transactionID = "test-tx-123"
@@ -260,7 +260,7 @@ func TestClient_AddFrontendRule(t *testing.T) {
 			}
 			_ = json.NewEncoder(w).Encode(response)
 
-		case r.Method == "PUT" && strings.Contains(r.URL.Path, "/frontends/https/acls"):
+		case r.Method == HTTPMethodPUT && strings.Contains(r.URL.Path, "/frontends/https/acls"):
 			// Update ACLs
 			aclsUpdated = true
 			if r.URL.Query().Get("transaction_id") != transactionID {
@@ -277,7 +277,7 @@ func TestClient_AddFrontendRule(t *testing.T) {
 			}
 			_ = json.NewEncoder(w).Encode(response)
 
-		case r.Method == "PUT" && strings.Contains(r.URL.Path, "/frontends/https/backend_switching_rules"):
+		case r.Method == HTTPMethodPUT && strings.Contains(r.URL.Path, "/frontends/https/backend_switching_rules"):
 			// Update backend switching rules
 			rulesUpdated = true
 			if r.URL.Query().Get("transaction_id") != transactionID {
@@ -294,19 +294,19 @@ func TestClient_AddFrontendRule(t *testing.T) {
 			}
 			_ = json.NewEncoder(w).Encode(response)
 
-		case r.Method == "GET" && strings.Contains(r.URL.Path, "/frontends/https/acls"):
+		case r.Method == HTTPMethodGET && strings.Contains(r.URL.Path, "/frontends/https/acls"):
 			// Mock getting current ACLs (empty initially)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode([]interface{}{})
 
-		case r.Method == "GET" && strings.Contains(r.URL.Path, "/frontends/https/backend_switching_rules"):
+		case r.Method == HTTPMethodGET && strings.Contains(r.URL.Path, "/frontends/https/backend_switching_rules"):
 			// Mock getting current backend switching rules (empty initially)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode([]interface{}{})
 
-		case r.Method == "PUT" && strings.Contains(r.URL.Path, "/transactions/"+transactionID):
+		case r.Method == HTTPMethodPUT && strings.Contains(r.URL.Path, "/transactions/"+transactionID):
 			// Commit transaction
 			transactionCommitted = true
 			w.Header().Set("Content-Type", "application/json")
@@ -352,13 +352,13 @@ func TestClient_RemoveFrontendRule(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == "GET" && strings.Contains(r.URL.Path, "/configuration/version"):
+		case r.Method == HTTPMethodGET && strings.Contains(r.URL.Path, "/configuration/version"):
 			// Mock version endpoint
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("12"))
 
-		case r.Method == "GET" && strings.Contains(r.URL.Path, "/frontends/https/acls"):
+		case r.Method == HTTPMethodGET && strings.Contains(r.URL.Path, "/frontends/https/acls"):
 			// Mock getting current ACLs (one rule that will be removed)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
@@ -371,7 +371,7 @@ func TestClient_RemoveFrontendRule(t *testing.T) {
 			}
 			_ = json.NewEncoder(w).Encode(response)
 
-		case r.Method == "GET" && strings.Contains(r.URL.Path, "/frontends/https/backend_switching_rules"):
+		case r.Method == HTTPMethodGET && strings.Contains(r.URL.Path, "/frontends/https/backend_switching_rules"):
 			// Mock getting current backend switching rules (one rule that will be removed)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
@@ -384,7 +384,7 @@ func TestClient_RemoveFrontendRule(t *testing.T) {
 			}
 			_ = json.NewEncoder(w).Encode(response)
 
-		case r.Method == "POST" && strings.Contains(r.URL.Path, "/transactions"):
+		case r.Method == HTTPMethodPOST && strings.Contains(r.URL.Path, "/transactions"):
 			transactionCreated = true
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
@@ -395,7 +395,7 @@ func TestClient_RemoveFrontendRule(t *testing.T) {
 			}
 			_ = json.NewEncoder(w).Encode(response)
 
-		case r.Method == "PUT" && strings.Contains(r.URL.Path, "/frontends/https/acls"):
+		case r.Method == HTTPMethodPUT && strings.Contains(r.URL.Path, "/frontends/https/acls"):
 			aclsUpdated = true
 			// Should receive empty array when removing last rule
 			var acls []interface{}
@@ -407,13 +407,13 @@ func TestClient_RemoveFrontendRule(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode([]interface{}{})
 
-		case r.Method == "PUT" && strings.Contains(r.URL.Path, "/frontends/https/backend_switching_rules"):
+		case r.Method == HTTPMethodPUT && strings.Contains(r.URL.Path, "/frontends/https/backend_switching_rules"):
 			rulesUpdated = true
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode([]interface{}{})
 
-		case r.Method == "PUT" && strings.Contains(r.URL.Path, "/transactions/"):
+		case r.Method == HTTPMethodPUT && strings.Contains(r.URL.Path, "/transactions/"):
 			transactionCommitted = true
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
@@ -445,7 +445,7 @@ func TestClient_RemoveFrontendRule(t *testing.T) {
 
 func TestClient_GetFrontendRules(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "GET" {
+		if r.Method != HTTPMethodGET {
 			t.Errorf("Expected GET, got %s", r.Method)
 		}
 
