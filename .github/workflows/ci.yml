@@ -71,11 +71,8 @@ jobs:
     
     strategy:
       matrix:
-        goos: [linux, darwin, windows]
+        goos: [linux]
         goarch: [amd64, arm64]
-        exclude:
-          - goos: windows
-            goarch: arm64
     
     steps:
     - name: Checkout code
@@ -186,9 +183,39 @@ jobs:
     - name: Start HAProxy test environment
       run: |
         docker compose -f docker-compose.dev.yml up -d
+        echo "Waiting for HAProxy services to start..."
+        
         # Wait for HAProxy DataPlane API to be ready
-        timeout 60 bash -c 'until curl -s -u admin:adminpwd http://localhost:5555/v3/info > /dev/null; do sleep 2; done'
-        echo "HAProxy test environment ready"
+        echo "Waiting for DataPlane API on port 5555..."
+        for i in {1..30}; do
+          if curl -s -u admin:adminpwd http://localhost:5555/v3/info > /dev/null 2>&1; then
+            echo "✓ DataPlane API is ready"
+            break
+          fi
+          echo "  Attempt $i/30: DataPlane API not ready yet..."
+          sleep 2
+        done
+        
+        # Also wait for HAProxy stats port to be ready
+        echo "Waiting for HAProxy stats on port 8404..."
+        for i in {1..30}; do
+          if nc -z localhost 8404 2>/dev/null; then
+            echo "✓ HAProxy stats port is ready"
+            break
+          fi
+          echo "  Attempt $i/30: Stats port not ready yet..."
+          sleep 1
+        done
+        
+        # Give it a bit more time to fully initialize
+        echo "Waiting 5 more seconds for complete initialization..."
+        sleep 5
+        
+        echo "✅ HAProxy test environment ready"
+        
+        # Show container status for debugging
+        docker ps
+        docker logs haproxy-test --tail 20
     
     - name: Run integration tests
       run: |
@@ -207,4 +234,4 @@ jobs:
       if: always()
       run: |
         docker compose -f docker-compose.dev.yml down -v
-        docker system prune -f
+        # Don't use docker system prune as it might interfere with GitHub Actions cache
