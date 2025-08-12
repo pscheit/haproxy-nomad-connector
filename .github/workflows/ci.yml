@@ -124,7 +124,7 @@ jobs:
         go-version: 1.22.x
     
     - name: Run golangci-lint
-      uses: golangci/golangci-lint-action@v3
+      uses: golangci/golangci-lint-action@v8
       with:
         version: latest
         args: ./cmd/... ./internal/... ./test/... ./e2e/... --timeout=5m
