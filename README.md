@@ -2,21 +2,14 @@
 
 🔗 **The missing HashiCorp integration** - Automatic HAProxy configuration from Nomad service discovery.
 
-Like Traefik's service discovery, but for HAProxy users who want performance + control.
+Like Traefik's service discovery, but for HAProxy users and Nomad standalone users (without Consul service discovery). 
 
 ## ⚡ Quick Start
 
 ```bash
-# Start development environment  
-docker compose -f docker-compose.dev.yml up -d
-
-# Run integration tests
-go test -tags=integration -v ./test/
-
-# Build connector
 go build ./cmd/haproxy-nomad-connector
 
-# Run connector
+# copy binary on to your Linux amd64 based system
 ./haproxy-nomad-connector
 ```
 
@@ -27,7 +20,7 @@ Automatically configures HAProxy based on Nomad service registrations:
 1. **Nomad service registers** with `haproxy.*` tags
 2. **Connector processes event** and classifies service type  
 3. **HAProxy config updated** via Data Plane API
-4. **Domain mapping updated** (optional) - automatic domain-to-backend mapping
+4. **Frontend rules updated** (optional) - automatic host-based routing rules
 5. **Changes persist** automatically - survives restarts
 
 ```nomad
@@ -38,13 +31,13 @@ service {
   tags = [
     "haproxy.enable=true",
     "haproxy.backend=dynamic", 
-    "haproxy.domain=api.example.com",  # NEW: Automatic domain mapping
+    "haproxy.domain=api.example.com",
     "haproxy.check.path=/health"
   ]
 }
 ```
 
-↓ **Becomes HAProxy config + domain mapping:**
+↓ **Becomes HAProxy config + frontend rules:**
 
 ```haproxy
 # HAProxy backend (via Data Plane API)
@@ -53,45 +46,42 @@ backend api_service
   server api_service_1 192.168.1.10:8080 check
 ```
 
+```haproxy
+frontend https
+  bind *:443 ssl crt /etc/ssl/certs/
+  use_backend api_service if { hdr(host) -i api.example.com }
 ```
-# Domain-backend map file (auto-generated)
-api.example.com                api_service
-```
+(you have to add the frontend to your haproxy cfg on your own)
 
-## 🏗️ Architecture
+## 🏷️ Nomad Service Tags Reference
 
-### Service Classification
-- **`dynamic`** - Creates new backends automatically
-- **`custom`** - Adds servers to existing static backends
-- **`static`** - No connector involvement
+The connector uses Nomad service tags to control HAProxy integration. Add these tags to your Nomad service definitions:
 
-### Configuration Tags
-- `haproxy.enable=true` - Enable HAProxy integration
-- `haproxy.backend=dynamic|custom` - Backend type
-- `haproxy.check.path=/health` - Health check path
-- `haproxy.check.method=GET` - Health check method
-- `haproxy.check.host=api.internal` - Health check host header
+### Core Control Tags
+- **`haproxy.enable=true`** - Enable HAProxy integration (required)
+- **`haproxy.backend=dynamic|custom`** - Backend management strategy:
+  - `dynamic` - Creates new backends automatically (default)
+  - `custom` - Adds servers to existing static backends
+
+### Frontend Routing Tags  
+- **`haproxy.domain=example.com`** - Domain for automatic frontend rule creation
+- **`haproxy.domain.type=exact|prefix|regex`** - Domain matching type:
+  - `exact` - Exact domain match (default)
+  - `prefix` - Prefix matching for subdomains
+  - `regex` - Regular expression patterns
+
+### Health Check Tags
+- **`haproxy.check.path=/health`** - HTTP health check endpoint path
+- **`haproxy.check.method=GET`** - HTTP health check method (default: GET)  
+- **`haproxy.check.host=api.internal`** - Host header for health checks
+- **`haproxy.check.type=http|tcp`** - Health check type:
+  - `http` - HTTP health checks (default when path specified)
+  - `tcp` - TCP connection health checks (default)
+- **`haproxy.check.disabled`** - Disable health checks entirely
 
 ## 🧪 Development
 
-Uses **Test-Driven Development** with real HAProxy integration:
-
-```bash
-# Run all tests
-go test ./...
-
-# Integration tests (requires running HAProxy)
-go test -tags=integration ./test/
-
-# Start development stack
-docker compose -f docker-compose.dev.yml up -d
-```
-
-### Development Stack
-- **HAProxy 3.0** with Data Plane API enabled
-- **Test backend service** (nginx)  
-- **Shared volumes** for config file access
-- **Authentication** via userlist
+use the makefile to run tests, linter and build.
 
 ## 📋 Requirements
 
@@ -100,16 +90,6 @@ docker compose -f docker-compose.dev.yml up -d
 - **Go 1.21+** for building
 
 ## 🚀 Installation
-
-### Docker
-```bash
-docker run -d \
-  -e NOMAD_ADDR=http://nomad:4646 \
-  -e HAPROXY_DATAPLANE_URL=http://haproxy:5555 \
-  -e HAPROXY_USERNAME=admin \
-  -e HAPROXY_PASSWORD=secret \
-  haproxy-nomad-connector
-```
 
 ### Binary
 ```bash
@@ -124,7 +104,7 @@ Environment variables or JSON config file:
 {
   "nomad": {
     "address": "http://localhost:4646",
-    "token": "",
+    "token": "add this!",
     "region": "global"
   },
   "haproxy": {
@@ -136,78 +116,7 @@ Environment variables or JSON config file:
 }
 ```
 
-### Backend Strategy Options
-
-Controls how the connector handles existing backends:
-
-- **`use_existing`** (default) - Use existing compatible backends, create new ones if needed
-- **`create_new`** - Always create new backends, fail if they already exist  
-- **`fail_on_conflict`** - Fail fast with clear error if backend already exists
-
-### Backend Compatibility
-
-For dynamic services, the connector checks that existing backends have:
-- `balance roundrobin` algorithm
-- Compatible configuration for dynamic server management
-
-If an incompatible backend exists, the connector will fail with a clear error message instead of silently ignoring the issue.
-
-## 🌐 Domain Mapping
-
-**NEW:** Automatic domain-to-backend mapping eliminates manual HAProxy map file management!
-
-### Quick Setup
-
-```bash
-# Enable domain mapping in config
-export DOMAIN_MAP_ENABLED=true
-export DOMAIN_MAP_FILE_PATH=/etc/haproxy2/domain-backend.map
-
-# Or in config.json:
-{
-  "domain_map": {
-    "enabled": true,
-    "file_path": "/etc/haproxy2/domain-backend.map"
-  }
-}
-```
-
-### How It Works
-
-Add `haproxy.domain` tag to your Nomad services:
-
-```hcl
-service {
-  name = "crm-prod"
-  port = 8080
-  tags = [
-    "haproxy.enable=true",
-    "haproxy.backend=dynamic",
-    "haproxy.domain=crm.ps-webforge.net"  # Automatic domain mapping!
-  ]
-}
-```
-
-The connector automatically:
-
-1. **Service registers** → Creates `crm_prod` backend
-2. **Domain mapping created** → Adds `crm.ps-webforge.net → crm_prod` to map file
-3. **Service deregisters** → Removes domain mapping when no servers remain
-
-### Advanced Domain Types
-
-```hcl
-# Exact domain match (default)
-"haproxy.domain=api.example.com"
-
-# Prefix matching  
-"haproxy.domain=api.example.com"
-"haproxy.domain.type=prefix"
-
-# Regex patterns
-"haproxy.domain=.*\\.assets\\.example\\.com"
-"haproxy.domain.type=regex"
-```
+The haproxy address needs to be the endpoint of your Data plane API. Look at the official docs how to run it.
 
 ### Benefits
 
@@ -222,7 +131,7 @@ The connector automatically:
 | Feature | Traefik | haproxy-nomad-connector |
 |---------|---------|-------------------------|
 | Service Discovery | ✅ Built-in | ✅ This project |
-| Domain Mapping | ✅ Built-in | ✅ **NEW: Automatic** |
+| Domain Mapping | ✅ Built-in | ✅  |
 | Performance | Good | ⚡ Excellent (HAProxy) |  
 | Configuration | Limited | 🎯 Full HAProxy power |
 | Persistence | Memory | 💾 Config files |
