@@ -30,7 +30,7 @@ jobs:
         path: |
           ~/.cache/go-build
           ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
+        key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('go.sum') }}
         restore-keys: |
           ${{ runner.os }}-go-${{ matrix.go-version }}-
           ${{ runner.os }}-go-
@@ -89,7 +89,7 @@ jobs:
         path: |
           ~/.cache/go-build
           ~/go/pkg/mod
-        key: ${{ runner.os }}-go-1.22.x-${{ hashFiles('**/go.sum') }}
+        key: ${{ runner.os }}-go-1.22.x-${{ hashFiles('go.sum') }}
         restore-keys: |
           ${{ runner.os }}-go-1.22.x-
           ${{ runner.os }}-go-
@@ -172,7 +172,7 @@ jobs:
         path: |
           ~/.cache/go-build
           ~/go/pkg/mod
-        key: ${{ runner.os }}-go-1.22.x-${{ hashFiles('**/go.sum') }}
+        key: ${{ runner.os }}-go-1.22.x-${{ hashFiles('go.sum') }}
         restore-keys: |
           ${{ runner.os }}-go-1.22.x-
           ${{ runner.os }}-go-
