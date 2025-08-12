@@ -197,9 +197,9 @@ jobs:
         done
         
         # Also wait for HAProxy stats port to be ready
-        echo "Waiting for HAProxy stats on port 8404..."
+        echo "Waiting for HAProxy stats on port 8099..."
         for i in {1..30}; do
-          if nc -z localhost 8404 2>/dev/null; then
+          if nc -z localhost 8099 2>/dev/null; then
             echo "✓ HAProxy stats port is ready"
             break
           fi
