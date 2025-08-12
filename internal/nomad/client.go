@@ -184,10 +184,49 @@ func (c *Client) streamEvents(ctx context.Context, eventChan chan<- ServiceEvent
 
 // GetServices gets all registered services (for initial sync)
 func (c *Client) GetServices() ([]*Service, error) {
-	// For now, return empty slice - we'll rely on event stream for service discovery
-	// This can be improved later when we sort out the exact API structure
-	c.logger.Printf("Initial sync disabled - relying on event stream for service discovery")
-	return []*Service{}, nil
+	c.logger.Printf("Fetching existing services from Nomad for initial sync...")
+
+	// First, list all service names grouped by namespace
+	serviceListStubs, _, err := c.client.Services().List(nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list services from Nomad: %w", err)
+	}
+
+	var services []*Service
+
+	// Iterate through each namespace and service name to get full registrations
+	for _, listStub := range serviceListStubs {
+		for _, serviceStub := range listStub.Services {
+			// Get full service registration details for this service name
+			serviceRegistrations, _, err := c.client.Services().Get(serviceStub.ServiceName, nil)
+			if err != nil {
+				c.logger.Printf("Warning: failed to get details for service %s: %v", serviceStub.ServiceName, err)
+				continue
+			}
+
+			// Convert each full service registration to our internal Service struct
+			for _, registration := range serviceRegistrations {
+				service := &Service{
+					ID:          registration.ID,
+					ServiceName: registration.ServiceName,
+					Namespace:   registration.Namespace,
+					NodeID:      registration.NodeID,
+					Datacenter:  registration.Datacenter,
+					JobID:       registration.JobID,
+					AllocID:     registration.AllocID,
+					Tags:        registration.Tags,
+					Address:     registration.Address,
+					Port:        registration.Port,
+					CreateIndex: registration.CreateIndex,
+					ModifyIndex: registration.ModifyIndex,
+				}
+				services = append(services, service)
+			}
+		}
+	}
+
+	c.logger.Printf("Found %d existing services in Nomad", len(services))
+	return services, nil
 }
 
 // GetJobSpec retrieves the job specification for a given job ID

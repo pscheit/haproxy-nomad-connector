@@ -1,6 +1,8 @@
 package nomad
 
 import (
+	"log"
+	"os"
 	"testing"
 	"time"
 
@@ -229,6 +231,43 @@ func TestGetServiceCheckFromJob(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGetServices(t *testing.T) {
+	logger := log.New(os.Stderr, "[test] ", log.LstdFlags)
+
+	t.Run("handles nil client gracefully", func(t *testing.T) {
+		client := &Client{
+			logger: logger,
+			// client is nil, should result in panic (testing actual behavior)
+		}
+
+		// Expect this to panic since the client is nil
+		assert.Panics(t, func() {
+			_, _ = client.GetServices()
+		})
+	})
+}
+
+func TestGetServicesIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	nomadAddr := os.Getenv("NOMAD_ADDR")
+	if nomadAddr == "" {
+		t.Skip("NOMAD_ADDR not set, skipping integration test")
+	}
+
+	logger := log.New(os.Stderr, "[test] ", log.LstdFlags)
+	client, err := NewClient(nomadAddr, "", "", logger)
+	require.NoError(t, err)
+
+	services, err := client.GetServices()
+	require.NoError(t, err)
+
+	// Should return services from Nomad API once implemented
+	t.Logf("Found %d services", len(services))
 }
 
 func stringPtr(s string) *string {
