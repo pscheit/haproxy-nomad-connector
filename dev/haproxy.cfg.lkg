@@ -1,5 +1,5 @@
-# _md5hash=0db4fcb42aa03f515d19c3c6f38bc9e1
-# _version=41
+# _md5hash=9787bdb0363e7bbdec0616c25be5adb4
+# _version=76
 # Dataplaneapi managed File
 # changing file directly can cause a conflict if dataplaneapi is running
 
@@ -24,14 +24,8 @@ frontend http from unnamed_defaults_1
 
 frontend https from unnamed_defaults_1
   bind *:443
-  acl is_test_backend hdr(host) test.example.com
-  acl is_dynamic_backend hdr(host) second.example.com
-  acl is_ps_webforge hdr(host) ^(www\.)?ps-webforge\.com$
-  acl is_test_backend_service hdr(host) ^(api\.|www\.)?test-regex\.com$
-  use_backend test_backend if is_test_backend
-  use_backend dynamic_backend if is_dynamic_backend
-  use_backend ps_webforge if is_ps_webforge
-  use_backend test_backend_service if is_test_backend_service
+  acl is_test_backend_service_60d0d8c1 hdr(host) ^(api\.|www\.)?test-regex\.com$
+  use_backend test_backend_service if is_test_backend_service_60d0d8c1
   default_backend test_backend
 
 frontend stats from unnamed_defaults_1

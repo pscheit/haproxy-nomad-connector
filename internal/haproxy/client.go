@@ -3,6 +3,7 @@ package haproxy
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -412,14 +413,22 @@ func (c *Client) getFrontendRulesInTransaction(frontend, transactionID string) (
 	return frontendRules, nil
 }
 
+// hashDomain creates a short hash of the domain for use in ACL names
+func hashDomain(domain string) string {
+	hash := sha256.Sum256([]byte(domain))
+	return fmt.Sprintf("%x", hash[:4]) // Use first 8 hex chars (4 bytes)
+}
+
 func (c *Client) setFrontendRulesInTransaction(frontend string, rules []FrontendRule, transactionID string) error {
 	// Convert rules to ACLs and backend switching rules
 	var acls []map[string]interface{}
 	var backendRules []map[string]interface{}
 
 	for _, rule := range rules {
-		// Generate ACL name from backend name (safe for HAProxy)
-		aclName := fmt.Sprintf("is_%s", strings.ReplaceAll(rule.Backend, "-", "_"))
+		// Generate ACL name: backend + domain hash (safe for HAProxy, unique per domain+backend)
+		aclName := fmt.Sprintf("is_%s_%s",
+			strings.ReplaceAll(rule.Backend, "-", "_"),
+			hashDomain(rule.Domain))
 
 		// Add ACL
 		acls = append(acls, map[string]interface{}{

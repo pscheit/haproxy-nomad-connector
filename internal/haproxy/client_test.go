@@ -608,8 +608,8 @@ func TestClient_AddFrontendRule_RegexDomain(t *testing.T) {
 		t.Errorf("Expected success with fixed ACL name, but got error: %v", err)
 	}
 
-	// Verify that the ACL name is now based on backend name (the fix)
-	expectedFixedACLName := "is_ps_webforge"
+	// Verify that the ACL name uses backend + domain hash format (the fix)
+	expectedFixedACLName := "is_ps_webforge_36fa0b03"
 	if capturedACLName != expectedFixedACLName {
 		t.Errorf("Expected fixed ACL name %s, got %s", expectedFixedACLName, capturedACLName)
 	}
