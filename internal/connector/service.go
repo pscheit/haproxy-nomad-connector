@@ -56,6 +56,7 @@ func ProcessServiceEventWithDomainMap(
 ) (interface{}, error) {
 	// Classify service based on tags
 	serviceType := classifyService(event.Service.Tags)
+	fmt.Printf("DEBUG: Service %s classified as %s with tags: %v\n", event.Service.ServiceName, serviceType, event.Service.Tags)
 
 	switch serviceType {
 	case haproxy.ServiceTypeDynamic:
@@ -292,11 +293,15 @@ func handleServiceRegistrationWithDomainMap(
 	// Handle frontend rule creation for domain tags
 	domainMapping := parseDomainMapping(event.Service.ServiceName, event.Service.Tags)
 	if domainMapping != nil {
+		fmt.Printf("DEBUG: Creating frontend rule for service %s: %s -> %s\n", event.Service.ServiceName, domainMapping.Domain, backendName)
 		err := client.AddFrontendRule("https", domainMapping.Domain, backendName)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create frontend rule for domain %s: %w", domainMapping.Domain, err)
 		}
 		result["frontend_rule"] = fmt.Sprintf("added rule: %s -> %s", domainMapping.Domain, backendName)
+		fmt.Printf("DEBUG: Successfully created frontend rule: %s -> %s\n", domainMapping.Domain, backendName)
+	} else {
+		fmt.Printf("DEBUG: No domain mapping found for service %s with tags: %v\n", event.Service.ServiceName, event.Service.Tags)
 	}
 
 	return result, nil
@@ -546,7 +551,7 @@ func createServerWithHealthCheck(
 
 // parseHealthCheckFromTags parses health check configuration from Nomad tags
 func parseHealthCheckFromTags(tags []string) *HealthCheckConfig {
-	var config HealthCheckConfig
+	var healthConfig HealthCheckConfig
 	found := false
 
 	for _, tag := range tags {
@@ -554,15 +559,15 @@ func parseHealthCheckFromTags(tags []string) *HealthCheckConfig {
 			found = true
 			switch {
 			case strings.HasPrefix(tag, "haproxy.check.disabled"):
-				config.Disabled = true
+				healthConfig.Disabled = true
 			case strings.HasPrefix(tag, "haproxy.check.path="):
-				config.Path = strings.TrimPrefix(tag, "haproxy.check.path=")
+				healthConfig.Path = strings.TrimPrefix(tag, "haproxy.check.path=")
 			case strings.HasPrefix(tag, "haproxy.check.method="):
-				config.Method = strings.TrimPrefix(tag, "haproxy.check.method=")
+				healthConfig.Method = strings.TrimPrefix(tag, "haproxy.check.method=")
 			case strings.HasPrefix(tag, "haproxy.check.host="):
-				config.Host = strings.TrimPrefix(tag, "haproxy.check.host=")
+				healthConfig.Host = strings.TrimPrefix(tag, "haproxy.check.host=")
 			case strings.HasPrefix(tag, "haproxy.check.type="):
-				config.Type = strings.TrimPrefix(tag, "haproxy.check.type=")
+				healthConfig.Type = strings.TrimPrefix(tag, "haproxy.check.type=")
 			}
 		}
 	}
@@ -572,18 +577,18 @@ func parseHealthCheckFromTags(tags []string) *HealthCheckConfig {
 	}
 
 	// If disabled, return special config
-	if config.Disabled {
-		config.Type = CheckTypeDisabled
-	} else if config.Type == "" {
+	if healthConfig.Disabled {
+		healthConfig.Type = CheckTypeDisabled
+	} else if healthConfig.Type == "" {
 		// If path is specified but no type, assume HTTP
-		if config.Path != "" {
-			config.Type = CheckTypeHTTP
+		if healthConfig.Path != "" {
+			healthConfig.Type = CheckTypeHTTP
 		} else {
-			config.Type = CheckTypeTCP
+			healthConfig.Type = CheckTypeTCP
 		}
 	}
 
-	return &config
+	return &healthConfig
 }
 
 // HealthCheckConfig represents parsed health check configuration
@@ -597,7 +602,7 @@ type HealthCheckConfig struct {
 
 // convertNomadToHAProxyCheck converts Nomad check to HAProxy format
 func convertNomadToHAProxyCheck(nomadCheck *nomad.ServiceCheck) *HealthCheckConfig {
-	config := &HealthCheckConfig{
+	healthConfig := &HealthCheckConfig{
 		Type:   nomadCheck.Type,
 		Path:   nomadCheck.Path,
 		Method: nomadCheck.Method,
@@ -606,40 +611,40 @@ func convertNomadToHAProxyCheck(nomadCheck *nomad.ServiceCheck) *HealthCheckConf
 	// Map Nomad check types to HAProxy equivalents
 	switch nomadCheck.Type {
 	case "http", "https":
-		config.Type = CheckTypeHTTP
-		if config.Method == "" {
-			config.Method = "GET"
+		healthConfig.Type = CheckTypeHTTP
+		if healthConfig.Method == "" {
+			healthConfig.Method = "GET"
 		}
 	case "tcp":
-		config.Type = CheckTypeTCP
+		healthConfig.Type = CheckTypeTCP
 	case "grpc":
-		config.Type = CheckTypeTCP // HAProxy doesn't have native gRPC checks, use TCP
+		healthConfig.Type = CheckTypeTCP // HAProxy doesn't have native gRPC checks, use TCP
 	default:
-		config.Type = CheckTypeTCP // Default fallback
+		healthConfig.Type = CheckTypeTCP // Default fallback
 	}
 
-	return config
+	return healthConfig
 }
 
 // applyHealthCheckToServer applies health check configuration to HAProxy server
-func applyHealthCheckToServer(server *haproxy.Server, config *HealthCheckConfig, source string, logger *log.Logger) {
-	if config.Disabled {
+func applyHealthCheckToServer(server *haproxy.Server, healthCheckConfig *HealthCheckConfig, source string, logger *log.Logger) {
+	if healthCheckConfig.Disabled {
 		server.Check = CheckTypeDisabled
 		server.CheckType = CheckTypeDisabled
 		logger.Printf("Disabled health checks for server %s (source: %s)", server.Name, source)
 		return
 	}
 
-	switch config.Type {
+	switch healthCheckConfig.Type {
 	case CheckTypeHTTP:
 		server.CheckType = CheckTypeHTTP
-		server.CheckPath = config.Path
-		server.CheckMethod = config.Method
-		if config.Host != "" {
-			server.CheckHost = config.Host
+		server.CheckPath = healthCheckConfig.Path
+		server.CheckMethod = healthCheckConfig.Method
+		if healthCheckConfig.Host != "" {
+			server.CheckHost = healthCheckConfig.Host
 		}
 		logger.Printf("Configured HTTP health check for server %s: %s %s (source: %s)",
-			server.Name, config.Method, config.Path, source)
+			server.Name, healthCheckConfig.Method, healthCheckConfig.Path, source)
 	case CheckTypeTCP:
 		server.CheckType = CheckTypeTCP
 		logger.Printf("Configured TCP health check for server %s (source: %s)", server.Name, source)

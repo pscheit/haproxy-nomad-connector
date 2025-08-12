@@ -107,18 +107,18 @@ func TestGenerateServerName(t *testing.T) {
 
 // mockHAProxyClient implements haproxy.ClientInterface for testing
 type mockHAProxyClient struct {
-	mu                     sync.Mutex
-	drainCalled            bool
-	deleteCalled           bool
-	drainError             error
-	deleteError            error
-	getVersionError        error
-	getServersServers      []haproxy.Server
-	getServersError        error
-	addFrontendRuleCalls      []FrontendRuleCall
-	addFrontendRuleError      error
-	removeFrontendRuleCalls   []RemoveFrontendRuleCall
-	removeFrontendRuleError   error
+	mu                      sync.Mutex
+	drainCalled             bool
+	deleteCalled            bool
+	drainError              error
+	deleteError             error
+	getVersionError         error
+	getServersServers       []haproxy.Server
+	getServersError         error
+	addFrontendRuleCalls    []FrontendRuleCall
+	addFrontendRuleError    error
+	removeFrontendRuleCalls []RemoveFrontendRuleCall
+	removeFrontendRuleError error
 }
 
 type FrontendRuleCall struct {
@@ -339,7 +339,7 @@ func TestHandleServiceDeregistrationWithDrainTimeout_DrainFails(t *testing.T) {
 
 func TestProcessServiceEventWithDomainTag_CreatesFrontendRule(t *testing.T) {
 	mockClient := &mockHAProxyClient{}
-	
+
 	event := &ServiceEvent{
 		Type: "ServiceRegistration",
 		Service: Service{
@@ -369,13 +369,13 @@ func TestProcessServiceEventWithDomainTag_CreatesFrontendRule(t *testing.T) {
 	if len(calls) != 1 {
 		t.Errorf("Expected 1 AddFrontendRule call, got %d", len(calls))
 	}
-	
+
 	if len(calls) > 0 {
 		call := calls[0]
-		expectedFrontend := "https"
+		const expectedFrontend = "https"
 		expectedDomain := "api.example.com"
 		expectedBackend := "api_service"
-		
+
 		if call.Frontend != expectedFrontend {
 			t.Errorf("Expected frontend '%s', got '%s'", expectedFrontend, call.Frontend)
 		}
@@ -395,7 +395,7 @@ func TestProcessServiceEventWithDomainTag_RemovesFrontendRule(t *testing.T) {
 			{Name: "api_service_10_0_0_1_8080"},
 		},
 	}
-	
+
 	event := &ServiceEvent{
 		Type: "ServiceDeregistration",
 		Service: Service{
@@ -426,12 +426,12 @@ func TestProcessServiceEventWithDomainTag_RemovesFrontendRule(t *testing.T) {
 	if len(calls) != 1 {
 		t.Errorf("Expected 1 RemoveFrontendRule call, got %d", len(calls))
 	}
-	
+
 	if len(calls) > 0 {
 		call := calls[0]
-		expectedFrontend := "https"
+		const expectedFrontend = "https"
 		expectedDomain := "api.example.com"
-		
+
 		if call.Frontend != expectedFrontend {
 			t.Errorf("Expected frontend '%s', got '%s'", expectedFrontend, call.Frontend)
 		}
