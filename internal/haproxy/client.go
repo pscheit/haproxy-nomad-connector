@@ -263,6 +263,41 @@ func (c *Client) AddFrontendRule(frontend, domain, backend string) error {
 }
 
 // RemoveFrontendRule removes a domain routing rule from the specified frontend
+// ResetFrontendRules clears all ACLs and backend switching rules for a frontend
+func (c *Client) ResetFrontendRules(frontendName string) error {
+	// Create transaction
+	transactionID, err := c.createTransaction()
+	if err != nil {
+		return fmt.Errorf("failed to create transaction: %w", err)
+	}
+
+	// Clear all ACLs
+	emptyACLs := []interface{}{}
+	err = c.makeRequest(HTTPMethodPUT,
+		fmt.Sprintf("/v3/services/haproxy/configuration/frontends/%s/acls?transaction_id=%s", frontendName, transactionID),
+		emptyACLs, nil, 0)
+	if err != nil {
+		return fmt.Errorf("failed to clear ACLs: %w", err)
+	}
+
+	// Clear all backend switching rules
+	emptyRules := []interface{}{}
+	err = c.makeRequest(HTTPMethodPUT,
+		fmt.Sprintf("/v3/services/haproxy/configuration/frontends/%s/backend_switching_rules?transaction_id=%s", frontendName, transactionID),
+		emptyRules, nil, 0)
+	if err != nil {
+		return fmt.Errorf("failed to clear backend switching rules: %w", err)
+	}
+
+	// Commit transaction
+	err = c.commitTransaction(transactionID)
+	if err != nil {
+		return fmt.Errorf("failed to commit reset transaction: %w", err)
+	}
+
+	return nil
+}
+
 func (c *Client) RemoveFrontendRule(frontend, domain string) error {
 	// Create transaction
 	transactionID, err := c.createTransaction()

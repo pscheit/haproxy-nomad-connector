@@ -155,6 +155,16 @@ func main() {
 	fmt.Println("============================================")
 
 	client := haproxy.NewClient("http://localhost:5555", "admin", "adminpwd")
+
+	// Reset HAProxy frontend rules before starting the test
+	fmt.Println("\n🧹 Resetting HAProxy frontend rules to clean state...")
+	err := client.ResetFrontendRules("https")
+	if err != nil {
+		fmt.Printf("❌ Failed to reset frontend rules: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("✅ HAProxy frontend rules reset successfully")
+
 	testDomain := "integration-test.local"
 
 	testRuleAddition(client, testDomain)

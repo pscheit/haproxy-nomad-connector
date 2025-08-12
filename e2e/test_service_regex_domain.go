@@ -24,6 +24,15 @@ func main() {
 	// Create HAProxy client
 	client := haproxy.NewClient("http://localhost:5555", "admin", "adminpwd")
 
+	// Reset HAProxy frontend rules before starting the test
+	fmt.Println("\n🧹 Resetting HAProxy frontend rules to clean state...")
+	err := client.ResetFrontendRules("https")
+	if err != nil {
+		fmt.Printf("❌ Failed to reset frontend rules: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("✅ HAProxy frontend rules reset successfully")
+
 	// Test the exact production case: service with regex domain
 	fmt.Println("\n📝 Testing service registration with regex domain pattern...")
 
@@ -48,10 +57,10 @@ func main() {
 
 	// Process event through connector - this should succeed completely
 	fmt.Println("\n1️⃣ Processing service event through connector...")
-	result, err := connector.ProcessServiceEvent(ctx, client, &serviceEvent)
+	result, err2 := connector.ProcessServiceEvent(ctx, client, &serviceEvent)
 
-	if err != nil {
-		fmt.Printf("❌ Service processing failed: %v\n", err)
+	if err2 != nil {
+		fmt.Printf("❌ Service processing failed: %v\n", err2)
 		os.Exit(1)
 	}
 	fmt.Printf("✅ Service processed successfully\n")
