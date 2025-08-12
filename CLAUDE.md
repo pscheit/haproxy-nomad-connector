@@ -121,3 +121,10 @@ The `haproxy.backend_strategy` setting controls conflict resolution:
 - Network operations should be retryable with exponential backoff
 - Configuration validation happens early in startup
 - Clear error messages for common operational issues
+- to make a new version and to be done the CI HAS to pass. Its not a matter of who did it, if the CI fails you fix it
+- you are done when:
+code is codestyled
+all acceptance criteria of the ADR/ticket are tested
+all tests pass
+its commited and pushed
+the CI passes green

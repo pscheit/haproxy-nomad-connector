@@ -12,6 +12,12 @@ import (
 	"github.com/pscheit/haproxy-nomad-connector/internal/haproxy"
 )
 
+// Test constants
+const (
+	testDomain  = "api.example.com"
+	testBackend = "api_service"
+)
+
 func TestClassifyService(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -346,7 +352,7 @@ func TestProcessServiceEventWithDomainTag_CreatesFrontendRule(t *testing.T) {
 			ServiceName: "api-service",
 			Address:     "10.0.0.1",
 			Port:        8080,
-			Tags:        []string{"haproxy.enable=true", "haproxy.domain=api.example.com"},
+			Tags:        []string{"haproxy.enable=true", "haproxy.domain=" + testDomain},
 		},
 	}
 
@@ -373,8 +379,8 @@ func TestProcessServiceEventWithDomainTag_CreatesFrontendRule(t *testing.T) {
 	if len(calls) > 0 {
 		call := calls[0]
 		const expectedFrontend = "https"
-		expectedDomain := "api.example.com"
-		expectedBackend := "api_service"
+		expectedDomain := testDomain
+		expectedBackend := testBackend
 
 		if call.Frontend != expectedFrontend {
 			t.Errorf("Expected frontend '%s', got '%s'", expectedFrontend, call.Frontend)
@@ -392,7 +398,7 @@ func TestProcessServiceEventWithDomainTag_RemovesFrontendRule(t *testing.T) {
 	// Configure mock to return 1 server (the one being removed)
 	mockClient := &mockHAProxyClient{
 		getServersServers: []haproxy.Server{
-			{Name: "api_service_10_0_0_1_8080"},
+			{Name: testBackend + "_10_0_0_1_8080"},
 		},
 	}
 
@@ -402,7 +408,7 @@ func TestProcessServiceEventWithDomainTag_RemovesFrontendRule(t *testing.T) {
 			ServiceName: "api-service",
 			Address:     "10.0.0.1",
 			Port:        8080,
-			Tags:        []string{"haproxy.enable=true", "haproxy.domain=api.example.com"},
+			Tags:        []string{"haproxy.enable=true", "haproxy.domain=" + testDomain},
 		},
 	}
 
@@ -430,7 +436,7 @@ func TestProcessServiceEventWithDomainTag_RemovesFrontendRule(t *testing.T) {
 	if len(calls) > 0 {
 		call := calls[0]
 		const expectedFrontend = "https"
-		expectedDomain := "api.example.com"
+		expectedDomain := testDomain
 
 		if call.Frontend != expectedFrontend {
 			t.Errorf("Expected frontend '%s', got '%s'", expectedFrontend, call.Frontend)
@@ -449,7 +455,7 @@ func TestProcessServiceEventWithDomainTag_ExistingServer_ShouldStillCreateFronte
 	mockClient := &mockHAProxyClient{
 		// Simulate that the server already exists in the backend
 		getServersServers: []haproxy.Server{
-			{Name: "api_service_10_0_0_1_8080", Address: "10.0.0.1", Port: 8080},
+			{Name: testBackend + "_10_0_0_1_8080", Address: "10.0.0.1", Port: 8080},
 		},
 	}
 
@@ -459,7 +465,7 @@ func TestProcessServiceEventWithDomainTag_ExistingServer_ShouldStillCreateFronte
 			ServiceName: "api-service",
 			Address:     "10.0.0.1",
 			Port:        8080,
-			Tags:        []string{"haproxy.enable=true", "haproxy.domain=api.example.com"},
+			Tags:        []string{"haproxy.enable=true", "haproxy.domain=" + testDomain},
 		},
 	}
 
@@ -487,7 +493,7 @@ func TestProcessServiceEventWithDomainTag_ExistingServer_ShouldStillCreateFronte
 
 	if len(calls) > 0 {
 		call := calls[0]
-		if call.Frontend != "https" || call.Domain != "api.example.com" || call.Backend != "api_service" {
+		if call.Frontend != "https" || call.Domain != testDomain || call.Backend != testBackend {
 			t.Errorf("Frontend rule has wrong parameters: %+v", call)
 		}
 	}

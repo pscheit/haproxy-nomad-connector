@@ -216,29 +216,10 @@ func handleServiceRegistrationWithDomainMap(
 
 	backendName := sanitizeServiceName(event.Service.ServiceName)
 
-	existingBackend, err := client.GetBackend(backendName)
-	if err == nil {
-		if !haproxy.IsBackendCompatibleForDynamicService(existingBackend) {
-			return nil, fmt.Errorf("backend %s already exists with incompatible configuration (algorithm: %s, expected: roundrobin)",
-				backendName, existingBackend.Balance.Algorithm)
-		}
-	} else {
-		backend := haproxy.Backend{
-			Name: backendName,
-			Balance: haproxy.Balance{
-				Algorithm: "roundrobin",
-			},
-		}
-
-		_, err = client.CreateBackend(backend, version)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create backend %s: %w", backendName, err)
-		}
-
-		version, err = client.GetConfigVersion()
-		if err != nil {
-			return nil, err
-		}
+	// Ensure backend exists and is compatible
+	version, err = ensureBackend(client, backendName, version)
+	if err != nil {
+		return nil, err
 	}
 
 	serverName := generateServerName(event.Service.ServiceName, event.Service.Address, event.Service.Port)
@@ -249,85 +230,135 @@ func handleServiceRegistrationWithDomainMap(
 		"server":  serverName,
 	}
 
-	// Check if server already exists
-	existingServers, err := client.GetServers(backendName)
+	// Ensure server exists
+	serverExists, err := ensureServer(client, backendName, serverName, event.Service.Address, event.Service.Port, version)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get existing servers for backend %s: %w", backendName, err)
+		return nil, err
 	}
-
-	serverExists := false
-	for _, existingServer := range existingServers {
-		if existingServer.Name == serverName {
-			serverExists = true
-			result["status"] = "already_exists"
-			break
-		}
-	}
-
-	// Create server if it doesn't exist
-	if !serverExists {
-		server := haproxy.Server{
-			Name:    serverName,
-			Address: event.Service.Address,
-			Port:    event.Service.Port,
-			Check:   "enabled", // Default - will be updated by health check logic
-		}
-
-		_, err = client.CreateServer(backendName, &server, version)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create server %s in backend %s: %w", serverName, backendName, err)
-		}
+	if serverExists {
+		result["status"] = "already_exists"
+	} else {
 		result["status"] = "created"
 	}
 
 	// ALWAYS reconcile domain mapping (regardless of server existence)
 	if domainMapManager != nil {
-		domainMapping := parseDomainMapping(event.Service.ServiceName, event.Service.Tags)
-		if domainMapping != nil {
-			domainMapManager.AddMapping(domainMapping)
-			if err := domainMapManager.WriteToFile(); err != nil {
-				result["domain_map_warning"] = fmt.Sprintf("failed to update domain map: %v", err)
-			} else {
-				result["domain_mapping"] = fmt.Sprintf("%s -> %s", domainMapping.Domain, domainMapping.BackendName)
-			}
-		}
+		reconcileDomainMapFile(domainMapManager, event.Service.ServiceName, event.Service.Tags, result)
 	}
 
 	// ALWAYS reconcile frontend rules (regardless of server existence)
-	domainMapping := parseDomainMapping(event.Service.ServiceName, event.Service.Tags)
-	if domainMapping != nil {
-		fmt.Printf("DEBUG: Reconciling frontend rule for service %s: %s -> %s\n", event.Service.ServiceName, domainMapping.Domain, backendName)
-
-		// Check if rule already exists
-		existingRules, err := client.GetFrontendRules("https")
-		if err != nil {
-			fmt.Printf("DEBUG: Failed to get existing rules: %v\n", err)
-		}
-
-		ruleExists := false
-		for _, rule := range existingRules {
-			if rule.Domain == domainMapping.Domain && rule.Backend == backendName {
-				ruleExists = true
-				break
-			}
-		}
-
-		if !ruleExists {
-			err := client.AddFrontendRule("https", domainMapping.Domain, backendName)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create frontend rule for domain %s: %w", domainMapping.Domain, err)
-			}
-			result["frontend_rule"] = fmt.Sprintf("added rule: %s -> %s", domainMapping.Domain, backendName)
-			fmt.Printf("DEBUG: Successfully created frontend rule: %s -> %s\n", domainMapping.Domain, backendName)
-		} else {
-			result["frontend_rule"] = fmt.Sprintf("rule exists: %s -> %s", domainMapping.Domain, backendName)
-			fmt.Printf("DEBUG: Frontend rule already exists: %s -> %s\n", domainMapping.Domain, backendName)
-		}
-	} else {
-		fmt.Printf("DEBUG: No domain mapping found for service %s with tags: %v\n", event.Service.ServiceName, event.Service.Tags)
+	if err := reconcileFrontendRule(client, event.Service.ServiceName, event.Service.Tags, backendName, result); err != nil {
+		return nil, err
 	}
 
 	return result, nil
+}
+
+// ensureBackend ensures the backend exists and is compatible
+func ensureBackend(client haproxy.ClientInterface, backendName string, version int) (int, error) {
+	existingBackend, err := client.GetBackend(backendName)
+	if err == nil {
+		if !haproxy.IsBackendCompatibleForDynamicService(existingBackend) {
+			return version, fmt.Errorf("backend %s already exists with incompatible configuration (algorithm: %s, expected: roundrobin)",
+				backendName, existingBackend.Balance.Algorithm)
+		}
+		return version, nil
+	}
+
+	backend := haproxy.Backend{
+		Name: backendName,
+		Balance: haproxy.Balance{
+			Algorithm: "roundrobin",
+		},
+	}
+
+	_, err = client.CreateBackend(backend, version)
+	if err != nil {
+		return version, fmt.Errorf("failed to create backend %s: %w", backendName, err)
+	}
+
+	return client.GetConfigVersion()
+}
+
+// ensureServer ensures the server exists in the backend
+func ensureServer(client haproxy.ClientInterface, backendName, serverName, address string, port, version int) (bool, error) {
+	existingServers, err := client.GetServers(backendName)
+	if err != nil {
+		return false, fmt.Errorf("failed to get existing servers for backend %s: %w", backendName, err)
+	}
+
+	for _, existingServer := range existingServers {
+		if existingServer.Name == serverName {
+			return true, nil
+		}
+	}
+
+	server := haproxy.Server{
+		Name:    serverName,
+		Address: address,
+		Port:    port,
+		Check:   "enabled",
+	}
+
+	_, err = client.CreateServer(backendName, &server, version)
+	if err != nil {
+		return false, fmt.Errorf("failed to create server %s in backend %s: %w", serverName, backendName, err)
+	}
+	return false, nil
+}
+
+// reconcileDomainMapFile updates the domain map file if configured
+func reconcileDomainMapFile(domainMapManager *DomainMapManager, serviceName string, tags []string, result map[string]string) {
+	domainMapping := parseDomainMapping(serviceName, tags)
+	if domainMapping == nil {
+		return
+	}
+
+	domainMapManager.AddMapping(domainMapping)
+	if err := domainMapManager.WriteToFile(); err != nil {
+		result["domain_map_warning"] = fmt.Sprintf("failed to update domain map: %v", err)
+	} else {
+		result["domain_mapping"] = fmt.Sprintf("%s -> %s", domainMapping.Domain, domainMapping.BackendName)
+	}
+}
+
+// reconcileFrontendRule ensures the frontend rule exists for domain-tagged services
+func reconcileFrontendRule(
+	client haproxy.ClientInterface,
+	serviceName string,
+	tags []string,
+	backendName string,
+	result map[string]string,
+) error {
+	domainMapping := parseDomainMapping(serviceName, tags)
+	if domainMapping == nil {
+		fmt.Printf("DEBUG: No domain mapping found for service %s with tags: %v\n", serviceName, tags)
+		return nil
+	}
+
+	fmt.Printf("DEBUG: Reconciling frontend rule for service %s: %s -> %s\n", serviceName, domainMapping.Domain, backendName)
+
+	// Check if rule already exists
+	existingRules, err := client.GetFrontendRules("https")
+	if err != nil {
+		fmt.Printf("DEBUG: Failed to get existing rules: %v\n", err)
+	}
+
+	for _, rule := range existingRules {
+		if rule.Domain == domainMapping.Domain && rule.Backend == backendName {
+			result["frontend_rule"] = fmt.Sprintf("rule exists: %s -> %s", domainMapping.Domain, backendName)
+			fmt.Printf("DEBUG: Frontend rule already exists: %s -> %s\n", domainMapping.Domain, backendName)
+			return nil
+		}
+	}
+
+	err = client.AddFrontendRule("https", domainMapping.Domain, backendName)
+	if err != nil {
+		return fmt.Errorf("failed to create frontend rule for domain %s: %w", domainMapping.Domain, err)
+	}
+	result["frontend_rule"] = fmt.Sprintf("added rule: %s -> %s", domainMapping.Domain, backendName)
+	fmt.Printf("DEBUG: Successfully created frontend rule: %s -> %s\n", domainMapping.Domain, backendName)
+	return nil
 }
 
 func handleServiceDeregistrationWithDomainMap(
@@ -350,94 +381,127 @@ func handleServiceDeregistrationWithDrainTimeout(
 	backendName := sanitizeServiceName(event.Service.ServiceName)
 	serverName := generateServerName(event.Service.ServiceName, event.Service.Address, event.Service.Port)
 
-	// Use graceful shutdown approach with drain state
 	result := map[string]string{
 		"backend": backendName,
 		"server":  serverName,
 	}
 
-	// First, try to drain the server to allow existing connections to complete
+	// Handle server drain/deletion
+	if err := drainAndRemoveServer(client, backendName, serverName, drainTimeoutSec, logger, result); err != nil {
+		return nil, err
+	}
+
+	// Check if this was the last server
+	existingServers, err := client.GetServers(backendName)
+	isLastServer := err == nil && len(existingServers) <= 1
+
+	// Handle domain mapping removal if this was the only instance
+	if domainMapManager != nil && isLastServer {
+		removeDomainMapFile(domainMapManager, event.Service.ServiceName, event.Service.Tags, result)
+	}
+
+	// Handle frontend rule removal if this was the only instance
+	if isLastServer {
+		removeFrontendRule(client, event.Service.ServiceName, event.Service.Tags, result)
+	}
+
+	return result, nil
+}
+
+// drainAndRemoveServer handles graceful draining and removal of a server
+func drainAndRemoveServer(
+	client haproxy.ClientInterface,
+	backendName, serverName string,
+	drainTimeoutSec int,
+	logger *log.Logger,
+	result map[string]string,
+) error {
+	// Try to drain the server to allow existing connections to complete
 	err := client.DrainServer(backendName, serverName)
 	if err != nil {
 		// If drain fails (maybe server doesn't exist), try direct deletion
 		version, versionErr := client.GetConfigVersion()
 		if versionErr != nil {
-			return nil, fmt.Errorf("failed to get config version for fallback deletion: %w", versionErr)
+			return fmt.Errorf("failed to get config version for fallback deletion: %w", versionErr)
 		}
 
 		err = client.DeleteServer(backendName, serverName, version)
 		if err != nil {
-			return nil, fmt.Errorf("failed to delete server %s from backend %s: %w", serverName, backendName, err)
+			return fmt.Errorf("failed to delete server %s from backend %s: %w", serverName, backendName, err)
 		}
 
 		result["status"] = StatusDeleted
 		result["method"] = MethodImmediateDeletion
+		return nil
+	}
+
+	result["status"] = StatusDraining
+	result["method"] = MethodGracefulDrain
+
+	// Schedule delayed removal after drain period
+	go scheduleDelayedServerRemoval(client, backendName, serverName, drainTimeoutSec, logger)
+	return nil
+}
+
+// scheduleDelayedServerRemoval removes a server after drain timeout
+func scheduleDelayedServerRemoval(
+	client haproxy.ClientInterface,
+	backendName, serverName string,
+	drainTimeoutSec int,
+	logger *log.Logger,
+) {
+	drainDuration := time.Duration(drainTimeoutSec) * time.Second
+	time.Sleep(drainDuration)
+
+	version, versionErr := client.GetConfigVersion()
+	if versionErr != nil {
+		if logger != nil {
+			logger.Printf("Warning: failed to get config version for delayed deletion: %v", versionErr)
+		}
+		return
+	}
+
+	deleteErr := client.DeleteServer(backendName, serverName, version)
+	if deleteErr != nil {
+		if logger != nil {
+			logger.Printf("Warning: failed delayed deletion of server %s from backend %s: %v", serverName, backendName, deleteErr)
+		}
 	} else {
-		result["status"] = StatusDraining
-		result["method"] = MethodGracefulDrain
-
-		// Schedule delayed removal after drain period
-		go func() {
-			drainDuration := time.Duration(drainTimeoutSec) * time.Second
-			time.Sleep(drainDuration)
-
-			version, versionErr := client.GetConfigVersion()
-			if versionErr != nil {
-				if logger != nil {
-					logger.Printf("Warning: failed to get config version for delayed deletion: %v", versionErr)
-				}
-				return
-			}
-
-			deleteErr := client.DeleteServer(backendName, serverName, version)
-			if deleteErr != nil {
-				if logger != nil {
-					logger.Printf("Warning: failed delayed deletion of server %s from backend %s: %v", serverName, backendName, deleteErr)
-				}
-			} else {
-				if logger != nil {
-					logger.Printf("Gracefully removed server %s from backend %s after %ds drain",
-						serverName, backendName, drainTimeoutSec)
-				}
-			}
-		}()
-	}
-
-	// Handle domain mapping removal if this was the only instance of the service
-	if domainMapManager != nil {
-		domainMapping := parseDomainMapping(event.Service.ServiceName, event.Service.Tags)
-		if domainMapping != nil {
-			// Check if there are other servers in the backend
-			existingServers, err := client.GetServers(backendName)
-			if err == nil && len(existingServers) <= 1 {
-				// Only this server or no servers remaining, remove domain mapping
-				domainMapManager.RemoveMapping(domainMapping.Domain)
-				if err := domainMapManager.WriteToFile(); err != nil {
-					result["domain_map_warning"] = fmt.Sprintf("failed to update domain map: %v", err)
-				} else {
-					result["domain_mapping_removed"] = domainMapping.Domain
-				}
-			}
+		if logger != nil {
+			logger.Printf("Gracefully removed server %s from backend %s after %ds drain",
+				serverName, backendName, drainTimeoutSec)
 		}
 	}
+}
 
-	// Handle frontend rule removal when service has domain tags
-	domainMapping := parseDomainMapping(event.Service.ServiceName, event.Service.Tags)
-	if domainMapping != nil {
-		// Check if there are other servers in the backend
-		existingServers, err := client.GetServers(backendName)
-		if err == nil && len(existingServers) <= 1 {
-			// Only this server or no servers remaining, remove frontend rule
-			err := client.RemoveFrontendRule("https", domainMapping.Domain)
-			if err != nil {
-				result["frontend_rule_warning"] = fmt.Sprintf("failed to remove frontend rule: %v", err)
-			} else {
-				result["frontend_rule_removed"] = domainMapping.Domain
-			}
-		}
+// removeDomainMapFile removes domain mapping from file if configured
+func removeDomainMapFile(domainMapManager *DomainMapManager, serviceName string, tags []string, result map[string]string) {
+	domainMapping := parseDomainMapping(serviceName, tags)
+	if domainMapping == nil {
+		return
 	}
 
-	return result, nil
+	domainMapManager.RemoveMapping(domainMapping.Domain)
+	if err := domainMapManager.WriteToFile(); err != nil {
+		result["domain_map_warning"] = fmt.Sprintf("failed to update domain map: %v", err)
+	} else {
+		result["domain_mapping_removed"] = domainMapping.Domain
+	}
+}
+
+// removeFrontendRule removes frontend rule when service has domain tags
+func removeFrontendRule(client haproxy.ClientInterface, serviceName string, tags []string, result map[string]string) {
+	domainMapping := parseDomainMapping(serviceName, tags)
+	if domainMapping == nil {
+		return
+	}
+
+	err := client.RemoveFrontendRule("https", domainMapping.Domain)
+	if err != nil {
+		result["frontend_rule_warning"] = fmt.Sprintf("failed to remove frontend rule: %v", err)
+	} else {
+		result["frontend_rule_removed"] = domainMapping.Domain
+	}
 }
 
 // processCustomServiceWithDomainMap adds servers to existing backends and updates domain mapping
