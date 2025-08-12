@@ -102,6 +102,22 @@ func (m *MockHAProxyClient) MaintainServer(backendName, serverName string) error
 	return nil
 }
 
+// Frontend rule management methods (required by ClientInterface)
+func (m *MockHAProxyClient) AddFrontendRule(frontend, domain, backend string) error {
+	// Mock implementation - no-op for existing tests
+	return nil
+}
+
+func (m *MockHAProxyClient) RemoveFrontendRule(frontend, domain string) error {
+	// Mock implementation - no-op for existing tests
+	return nil
+}
+
+func (m *MockHAProxyClient) GetFrontendRules(frontend string) ([]haproxy.FrontendRule, error) {
+	// Mock implementation - return empty rules for existing tests
+	return []haproxy.FrontendRule{}, nil
+}
+
 func TestServiceRegistrationWithDomainMapping(t *testing.T) {
 	tmpDir := t.TempDir()
 	mapFile := filepath.Join(tmpDir, "domain-backend.map")

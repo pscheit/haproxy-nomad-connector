@@ -167,6 +167,22 @@ func (m *mockHAProxyClient) MaintainServer(backendName, serverName string) error
 	return nil
 }
 
+// Frontend rule management methods (required by ClientInterface)
+func (m *mockHAProxyClient) AddFrontendRule(frontend, domain, backend string) error {
+	// Mock implementation - no-op for existing tests
+	return nil
+}
+
+func (m *mockHAProxyClient) RemoveFrontendRule(frontend, domain string) error {
+	// Mock implementation - no-op for existing tests
+	return nil
+}
+
+func (m *mockHAProxyClient) GetFrontendRules(frontend string) ([]haproxy.FrontendRule, error) {
+	// Mock implementation - return empty rules for existing tests
+	return []haproxy.FrontendRule{}, nil
+}
+
 // Helper methods for thread-safe access to test state
 func (m *mockHAProxyClient) wasDrainCalled() bool {
 	m.mu.Lock()
