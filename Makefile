@@ -71,7 +71,7 @@ lint:
 	@if command -v golangci-lint >/dev/null 2>&1; then \
 		golangci-lint run ./cmd/... ./internal/... ./test/... ./e2e/...; \
 	else \
-		echo "golangci-lint not installed. Install with: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"; \
+		echo "golangci-lint not installed. Install with: https://golangci-lint.run/docs/welcome/install/#binaries"; \
 		exit 1; \
 	fi
 

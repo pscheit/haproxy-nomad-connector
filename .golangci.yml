@@ -1,65 +1,12 @@
+version: "2"
 run:
-  timeout: 5m
-  go: '1.22'
+  go: "1.22"
   modules-download-mode: readonly
-
-linters-settings:
-  govet:
-    enable:
-      - shadow
-  golint:
-    min-confidence: 0
-  gocyclo:
-    min-complexity: 15
-  maligned:
-    suggest-new: true
-  dupl:
-    threshold: 100
-  goconst:
-    min-len: 2
-    min-occurrences: 3
-  misspell:
-    locale: US
-  lll:
-    line-length: 140
-  goimports:
-    local-prefixes: github.com/pscheit/haproxy-nomad-connector
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - experimental
-      - opinionated
-      - performance
-      - style
-    disabled-checks:
-      - dupImport # https://github.com/go-critic/go-critic/issues/845
-      - ifElseChain
-      - octalLiteral
-      - whyNoLint
-  funlen:
-    lines: 100
-    statements: 50
-  gci:
-    sections:
-      - standard
-      - default
-      - prefix(github.com/pscheit/haproxy-nomad-connector)
-    section-separators:
-      - newLine
-  mnd:
-    checks:
-      - argument
-      - case
-      - condition
-      - operation
-      - return
-      - assign
-
 linters:
-  disable-all: true
+  default: none
   enable:
     - bodyclose
-    - copyloopvar    # replaces exportloopref
+    - copyloopvar
     - dogsled
     - dupl
     - errcheck
@@ -69,53 +16,108 @@ linters:
     - goconst
     - gocritic
     - gocyclo
-    - gofmt
-    - goimports
-    - mnd            # replaces gomnd
     - goprintffuncname
     - gosec
-    - gosimple
     - govet
     - ineffassign
     - lll
     - misspell
+    - mnd
     - nakedret
     - noctx
     - nolintlint
     - rowserrcheck
     - staticcheck
-    - stylecheck
-    - typecheck
     - unconvert
     - unparam
-    - unused         # replaces deadcode, structcheck, varcheck
+    - unused
     - whitespace
-
+  settings:
+    dupl:
+      threshold: 100
+    funlen:
+      lines: 100
+      statements: 50
+    goconst:
+      min-len: 2
+      min-occurrences: 3
+    gocritic:
+      disabled-checks:
+        - dupImport
+        - ifElseChain
+        - octalLiteral
+        - whyNoLint
+      enabled-tags:
+        - diagnostic
+        - experimental
+        - opinionated
+        - performance
+        - style
+    gocyclo:
+      min-complexity: 15
+    govet:
+      enable:
+        - shadow
+    lll:
+      line-length: 140
+    misspell:
+      locale: US
+    mnd:
+      checks:
+        - argument
+        - case
+        - condition
+        - operation
+        - return
+        - assign
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - funlen
+          - gocyclo
+          - mnd
+        path: _test\.go
+      - linters:
+          - mnd
+        path: cmd/
+      - linters:
+          - lll
+        source: '^//go:generate '
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 issues:
-  # Excluding configuration per-path, per-linter, per-text and per-source
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - mnd
-        - funlen
-        - gocyclo
-    - path: cmd/
-      linters:
-        - mnd
-    - linters:
-        - lll
-      source: "^//go:generate "
-
-  # Maximum issues count per one linter. Set to 0 to disable. Default is 50.
   max-issues-per-linter: 0
-
-  # Maximum count of issues with the same text. Set to 0 to disable. Default is 3.
   max-same-issues: 0
-
 severity:
-  default-severity: error
-  case-sensitive: false
+  default: error
   rules:
     - linters:
-      - dupl
+        - dupl
       severity: info
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/pscheit/haproxy-nomad-connector)
+    goimports:
+      local-prefixes:
+        - github.com/pscheit/haproxy-nomad-connector
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
