@@ -100,6 +100,12 @@ type DomainMapConfig struct {
 	Enabled  bool   `json:"enabled"`
 }
 
+// FrontendRule represents a domain-to-backend routing rule
+type FrontendRule struct {
+	Domain  string `json:"domain"`
+	Backend string `json:"backend"`
+}
+
 // APIError represents an API error response
 type APIError struct {
 	StatusCode int    `json:"status_code"`
@@ -125,4 +131,9 @@ type ClientInterface interface {
 	DrainServer(backendName, serverName string) error
 	ReadyServer(backendName, serverName string) error
 	MaintainServer(backendName, serverName string) error
+
+	// Frontend rule management
+	AddFrontendRule(frontend, domain, backend string) error
+	RemoveFrontendRule(frontend, domain string) error
+	GetFrontendRules(frontend string) ([]FrontendRule, error)
 }

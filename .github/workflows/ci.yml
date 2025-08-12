@@ -154,3 +154,57 @@ jobs:
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: gosec.sarif
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: 1.22.x
+    
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-1.22.x-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-1.22.x-
+          ${{ runner.os }}-go-
+    
+    - name: Download dependencies
+      run: go mod download
+    
+    - name: Start HAProxy test environment
+      run: |
+        docker-compose -f docker-compose.dev.yml up -d
+        # Wait for HAProxy DataPlane API to be ready
+        timeout 60 bash -c 'until curl -s -u admin:adminpwd http://localhost:5555/v3/info > /dev/null; do sleep 2; done'
+        echo "HAProxy test environment ready"
+    
+    - name: Run integration tests
+      run: |
+        echo "Running HAProxy DataPlane API integration tests..."
+        go run test_frontend_rules.go
+    
+    - name: Show HAProxy logs on failure
+      if: failure()
+      run: |
+        echo "=== HAProxy Container Logs ==="
+        docker logs haproxy-test
+        echo "=== Test Backend Container Logs ==="
+        docker logs test-backend
+    
+    - name: Cleanup test environment
+      if: always()
+      run: |
+        docker-compose -f docker-compose.dev.yml down -v
+        docker system prune -f

@@ -219,3 +219,199 @@ func (c *Client) GetServers(backendName string) ([]Server, error) {
 func IsBackendCompatibleForDynamicService(backend *Backend) bool {
 	return backend.Balance.Algorithm == "roundrobin"
 }
+
+// AddFrontendRule adds a domain-to-backend routing rule to the specified frontend
+func (c *Client) AddFrontendRule(frontend, domain, backend string) error {
+	// Create transaction
+	transactionID, err := c.createTransaction()
+	if err != nil {
+		return fmt.Errorf("failed to create transaction: %w", err)
+	}
+
+	// Get current rules to append to
+	currentRules, err := c.getFrontendRulesInTransaction(frontend, transactionID)
+	if err != nil {
+		return fmt.Errorf("failed to get current rules: %w", err)
+	}
+
+	// Add new rule (avoid duplicates)
+	newRule := FrontendRule{Domain: domain, Backend: backend}
+	exists := false
+	for i, rule := range currentRules {
+		if rule.Domain == domain {
+			// Update existing rule
+			currentRules[i].Backend = backend
+			exists = true
+			break
+		}
+	}
+	if !exists {
+		currentRules = append(currentRules, newRule)
+	}
+
+	// Update ACLs and backend switching rules
+	if err := c.setFrontendRulesInTransaction(frontend, currentRules, transactionID); err != nil {
+		return fmt.Errorf("failed to update rules: %w", err)
+	}
+
+	// Commit transaction
+	if err := c.commitTransaction(transactionID); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// RemoveFrontendRule removes a domain routing rule from the specified frontend
+func (c *Client) RemoveFrontendRule(frontend, domain string) error {
+	// Create transaction
+	transactionID, err := c.createTransaction()
+	if err != nil {
+		return fmt.Errorf("failed to create transaction: %w", err)
+	}
+
+	// Get current rules
+	currentRules, err := c.getFrontendRulesInTransaction(frontend, transactionID)
+	if err != nil {
+		return fmt.Errorf("failed to get current rules: %w", err)
+	}
+
+	// Remove rule for domain
+	var updatedRules []FrontendRule
+	for _, rule := range currentRules {
+		if rule.Domain != domain {
+			updatedRules = append(updatedRules, rule)
+		}
+	}
+
+	// Update ACLs and backend switching rules
+	if err := c.setFrontendRulesInTransaction(frontend, updatedRules, transactionID); err != nil {
+		return fmt.Errorf("failed to update rules: %w", err)
+	}
+
+	// Commit transaction
+	if err := c.commitTransaction(transactionID); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// GetFrontendRules returns all domain-to-backend routing rules for the specified frontend
+func (c *Client) GetFrontendRules(frontend string) ([]FrontendRule, error) {
+	return c.getFrontendRulesInTransaction(frontend, "")
+}
+
+// Helper methods for transaction management and rule manipulation
+
+func (c *Client) createTransaction() (string, error) {
+	// Get current version
+	version, err := c.GetConfigVersion()
+	if err != nil {
+		return "", fmt.Errorf("failed to get config version: %w", err)
+	}
+
+	// Create transaction
+	var response map[string]interface{}
+	path := fmt.Sprintf("/v3/services/haproxy/transactions?version=%d", version)
+	err = c.makeRequest(HTTPMethodPOST, path, nil, &response, 0)
+	if err != nil {
+		return "", err
+	}
+
+	transactionID, ok := response["id"].(string)
+	if !ok {
+		return "", fmt.Errorf("invalid transaction ID in response")
+	}
+
+	return transactionID, nil
+}
+
+func (c *Client) commitTransaction(transactionID string) error {
+	path := fmt.Sprintf("/v3/services/haproxy/transactions/%s", transactionID)
+	var response map[string]interface{}
+	return c.makeRequest(HTTPMethodPUT, path, nil, &response, 0)
+}
+
+func (c *Client) getFrontendRulesInTransaction(frontend, transactionID string) ([]FrontendRule, error) {
+	// Get ACLs
+	var acls []map[string]interface{}
+	aclPath := fmt.Sprintf("/v3/services/haproxy/configuration/frontends/%s/acls", frontend)
+	if transactionID != "" {
+		aclPath += "?transaction_id=" + transactionID
+	}
+	if err := c.makeRequest(HTTPMethodGET, aclPath, nil, &acls, 0); err != nil {
+		return nil, fmt.Errorf("failed to get ACLs: %w", err)
+	}
+
+	// Get backend switching rules
+	var rules []map[string]interface{}
+	rulePath := fmt.Sprintf("/v3/services/haproxy/configuration/frontends/%s/backend_switching_rules", frontend)
+	if transactionID != "" {
+		rulePath += "?transaction_id=" + transactionID
+	}
+	if err := c.makeRequest(HTTPMethodGET, rulePath, nil, &rules, 0); err != nil {
+		return nil, fmt.Errorf("failed to get backend switching rules: %w", err)
+	}
+
+	// Match ACLs to backend switching rules
+	var frontendRules []FrontendRule
+	for _, rule := range rules {
+		condTest, _ := rule["cond_test"].(string)
+		backendName, _ := rule["name"].(string)
+		
+		// Find matching ACL
+		for _, acl := range acls {
+			aclName, _ := acl["acl_name"].(string)
+			if aclName == condTest {
+				domain, _ := acl["value"].(string)
+				frontendRules = append(frontendRules, FrontendRule{
+					Domain:  domain,
+					Backend: backendName,
+				})
+				break
+			}
+		}
+	}
+
+	return frontendRules, nil
+}
+
+func (c *Client) setFrontendRulesInTransaction(frontend string, rules []FrontendRule, transactionID string) error {
+	// Convert rules to ACLs and backend switching rules
+	var acls []map[string]interface{}
+	var backendRules []map[string]interface{}
+
+	for _, rule := range rules {
+		// Generate ACL name from domain
+		aclName := fmt.Sprintf("is_%s", strings.ReplaceAll(strings.ReplaceAll(rule.Domain, ".", "_"), "-", "_"))
+		
+		// Add ACL
+		acls = append(acls, map[string]interface{}{
+			"acl_name":  aclName,
+			"criterion": "hdr(host)",
+			"value":     rule.Domain,
+		})
+
+		// Add backend switching rule
+		backendRules = append(backendRules, map[string]interface{}{
+			"cond":      "if",
+			"cond_test": aclName,
+			"name":      rule.Backend,
+		})
+	}
+
+	// Update ACLs
+	aclPath := fmt.Sprintf("/v3/services/haproxy/configuration/frontends/%s/acls?transaction_id=%s", frontend, transactionID)
+	if err := c.makeRequest(HTTPMethodPUT, aclPath, acls, nil, 0); err != nil {
+		return fmt.Errorf("failed to update ACLs: %w", err)
+	}
+
+	// Update backend switching rules
+	rulePath := fmt.Sprintf("/v3/services/haproxy/configuration/frontends/%s/backend_switching_rules?transaction_id=%s", frontend, transactionID)
+	if err := c.makeRequest(HTTPMethodPUT, rulePath, backendRules, nil, 0); err != nil {
+		return fmt.Errorf("failed to update backend switching rules: %w", err)
+	}
+
+	return nil
+}

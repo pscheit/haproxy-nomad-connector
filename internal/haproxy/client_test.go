@@ -233,3 +233,286 @@ func TestClient_GetRuntimeServer(t *testing.T) {
 		t.Errorf("Expected Address %s, got %s", expectedServer.Address, result.Address)
 	}
 }
+
+func TestClient_AddFrontendRule(t *testing.T) {
+	// Track API calls to verify transaction workflow
+	var transactionCreated, aclsUpdated, rulesUpdated, transactionCommitted bool
+	var transactionID string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/configuration/version"):
+			// Mock version endpoint
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("12"))
+
+		case r.Method == "POST" && strings.Contains(r.URL.Path, "/transactions"):
+			// Create transaction
+			transactionCreated = true
+			transactionID = "test-tx-123"
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			response := map[string]interface{}{
+				"id":       transactionID,
+				"status":   "in_progress",
+				"_version": 1,
+			}
+			_ = json.NewEncoder(w).Encode(response)
+
+		case r.Method == "PUT" && strings.Contains(r.URL.Path, "/frontends/https/acls"):
+			// Update ACLs
+			aclsUpdated = true
+			if r.URL.Query().Get("transaction_id") != transactionID {
+				t.Errorf("Expected transaction_id %s", transactionID)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			response := []map[string]interface{}{
+				{
+					"acl_name":  "is_example_com",
+					"criterion": "hdr(host)",
+					"value":     "example.com",
+				},
+			}
+			_ = json.NewEncoder(w).Encode(response)
+
+		case r.Method == "PUT" && strings.Contains(r.URL.Path, "/frontends/https/backend_switching_rules"):
+			// Update backend switching rules
+			rulesUpdated = true
+			if r.URL.Query().Get("transaction_id") != transactionID {
+				t.Errorf("Expected transaction_id %s", transactionID)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			response := []map[string]interface{}{
+				{
+					"cond":      "if",
+					"cond_test": "is_example_com",
+					"name":      "example_backend",
+				},
+			}
+			_ = json.NewEncoder(w).Encode(response)
+
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/frontends/https/acls"):
+			// Mock getting current ACLs (empty initially)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]interface{}{})
+
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/frontends/https/backend_switching_rules"):
+			// Mock getting current backend switching rules (empty initially)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]interface{}{})
+
+		case r.Method == "PUT" && strings.Contains(r.URL.Path, "/transactions/"+transactionID):
+			// Commit transaction
+			transactionCommitted = true
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			response := map[string]interface{}{
+				"id":     transactionID,
+				"status": "success",
+			}
+			_ = json.NewEncoder(w).Encode(response)
+
+		default:
+			t.Errorf("Unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "admin", "password")
+
+	// This should fail initially - method doesn't exist yet
+	err := client.AddFrontendRule("https", "example.com", "example_backend")
+	if err != nil {
+		t.Fatalf("AddFrontendRule failed: %v", err)
+	}
+
+	// Verify all expected API calls were made
+	if !transactionCreated {
+		t.Error("Expected transaction to be created")
+	}
+	if !aclsUpdated {
+		t.Error("Expected ACLs to be updated")
+	}
+	if !rulesUpdated {
+		t.Error("Expected backend switching rules to be updated")
+	}
+	if !transactionCommitted {
+		t.Error("Expected transaction to be committed")
+	}
+}
+
+func TestClient_RemoveFrontendRule(t *testing.T) {
+	var transactionCreated, aclsUpdated, rulesUpdated, transactionCommitted bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/configuration/version"):
+			// Mock version endpoint
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("12"))
+
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/frontends/https/acls"):
+			// Mock getting current ACLs (one rule that will be removed)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			response := []map[string]interface{}{
+				{
+					"acl_name":  "is_example_com",
+					"criterion": "hdr(host)",
+					"value":     "example.com",
+				},
+			}
+			_ = json.NewEncoder(w).Encode(response)
+
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/frontends/https/backend_switching_rules"):
+			// Mock getting current backend switching rules (one rule that will be removed)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			response := []map[string]interface{}{
+				{
+					"cond":      "if",
+					"cond_test": "is_example_com",
+					"name":      "example_backend",
+				},
+			}
+			_ = json.NewEncoder(w).Encode(response)
+
+		case r.Method == "POST" && strings.Contains(r.URL.Path, "/transactions"):
+			transactionCreated = true
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			response := map[string]interface{}{
+				"id":       "test-tx-456",
+				"status":   "in_progress",
+				"_version": 1,
+			}
+			_ = json.NewEncoder(w).Encode(response)
+
+		case r.Method == "PUT" && strings.Contains(r.URL.Path, "/frontends/https/acls"):
+			aclsUpdated = true
+			// Should receive empty array when removing last rule
+			var acls []interface{}
+			_ = json.NewDecoder(r.Body).Decode(&acls)
+			if len(acls) != 0 {
+				t.Errorf("Expected empty ACL array when removing rule, got %d items", len(acls))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]interface{}{})
+
+		case r.Method == "PUT" && strings.Contains(r.URL.Path, "/frontends/https/backend_switching_rules"):
+			rulesUpdated = true
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]interface{}{})
+
+		case r.Method == "PUT" && strings.Contains(r.URL.Path, "/transactions/"):
+			transactionCommitted = true
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			response := map[string]interface{}{
+				"id":     "test-tx-456",
+				"status": "success",
+			}
+			_ = json.NewEncoder(w).Encode(response)
+
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "admin", "password")
+
+	// This should fail initially - method doesn't exist yet
+	err := client.RemoveFrontendRule("https", "example.com")
+	if err != nil {
+		t.Fatalf("RemoveFrontendRule failed: %v", err)
+	}
+
+	// Verify transaction workflow was followed
+	if !transactionCreated || !aclsUpdated || !rulesUpdated || !transactionCommitted {
+		t.Error("Expected complete transaction workflow for rule removal")
+	}
+}
+
+func TestClient_GetFrontendRules(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("Expected GET, got %s", r.Method)
+		}
+
+		switch {
+		case strings.Contains(r.URL.Path, "/frontends/https/acls"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			response := []map[string]interface{}{
+				{
+					"acl_name":  "is_example_com",
+					"criterion": "hdr(host)",
+					"value":     "example.com",
+				},
+				{
+					"acl_name":  "is_test_com",
+					"criterion": "hdr(host)",
+					"value":     "test.com",
+				},
+			}
+			_ = json.NewEncoder(w).Encode(response)
+
+		case strings.Contains(r.URL.Path, "/frontends/https/backend_switching_rules"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			response := []map[string]interface{}{
+				{
+					"cond":      "if",
+					"cond_test": "is_example_com",
+					"name":      "example_backend",
+				},
+				{
+					"cond":      "if",
+					"cond_test": "is_test_com",
+					"name":      "test_backend",
+				},
+			}
+			_ = json.NewEncoder(w).Encode(response)
+
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "admin", "password")
+
+	// This should fail initially - method doesn't exist yet
+	rules, err := client.GetFrontendRules("https")
+	if err != nil {
+		t.Fatalf("GetFrontendRules failed: %v", err)
+	}
+
+	expectedRules := []FrontendRule{
+		{Domain: "example.com", Backend: "example_backend"},
+		{Domain: "test.com", Backend: "test_backend"},
+	}
+
+	if len(rules) != len(expectedRules) {
+		t.Fatalf("Expected %d rules, got %d", len(expectedRules), len(rules))
+	}
+
+	for i, rule := range rules {
+		if rule.Domain != expectedRules[i].Domain {
+			t.Errorf("Expected domain %s, got %s", expectedRules[i].Domain, rule.Domain)
+		}
+		if rule.Backend != expectedRules[i].Backend {
+			t.Errorf("Expected backend %s, got %s", expectedRules[i].Backend, rule.Backend)
+		}
+	}
+}
