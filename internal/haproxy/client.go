@@ -223,6 +223,11 @@ func IsBackendCompatibleForDynamicService(backend *Backend) bool {
 
 // AddFrontendRule adds a domain-to-backend routing rule to the specified frontend
 func (c *Client) AddFrontendRule(frontend, domain, backend string) error {
+	return c.AddFrontendRuleWithType(frontend, domain, backend, DomainTypeExact)
+}
+
+// AddFrontendRuleWithType adds a domain-to-backend routing rule with specific domain type
+func (c *Client) AddFrontendRuleWithType(frontend, domain, backend string, domainType DomainType) error {
 	// Create transaction
 	transactionID, err := c.createTransaction()
 	if err != nil {
@@ -236,12 +241,13 @@ func (c *Client) AddFrontendRule(frontend, domain, backend string) error {
 	}
 
 	// Add new rule (avoid duplicates)
-	newRule := FrontendRule{Domain: domain, Backend: backend}
+	newRule := FrontendRule{Domain: domain, Backend: backend, Type: domainType}
 	exists := false
 	for i, rule := range currentRules {
 		if rule.Domain == domain {
 			// Update existing rule
 			currentRules[i].Backend = backend
+			currentRules[i].Type = domainType
 			exists = true
 			break
 		}
@@ -400,10 +406,20 @@ func (c *Client) getFrontendRulesInTransaction(frontend, transactionID string) (
 		for _, acl := range acls {
 			aclName, _ := acl["acl_name"].(string)
 			if aclName == condTest {
-				domain, _ := acl["value"].(string)
+				value, _ := acl["value"].(string)
+
+				// Strip -m reg prefix if present
+				domain := value
+				domainType := DomainTypeExact
+				if strings.HasPrefix(value, "-m reg ") {
+					domain = strings.TrimPrefix(value, "-m reg ")
+					domainType = DomainTypeRegex
+				}
+
 				frontendRules = append(frontendRules, FrontendRule{
 					Domain:  domain,
 					Backend: backendName,
+					Type:    domainType,
 				})
 				break
 			}
@@ -430,12 +446,22 @@ func (c *Client) setFrontendRulesInTransaction(frontend string, rules []Frontend
 			strings.ReplaceAll(rule.Backend, "-", "_"),
 			hashDomain(rule.Domain))
 
-		// Add ACL
-		acls = append(acls, map[string]interface{}{
+		value := rule.Domain
+		if rule.Type == DomainTypeRegex {
+			value = "-m reg " + rule.Domain
+		}
+
+		acl := map[string]interface{}{
 			"acl_name":  aclName,
 			"criterion": "hdr(host)",
-			"value":     rule.Domain,
-		})
+			"value":     value,
+		}
+
+		if rule.Type == DomainTypeRegex {
+			fmt.Printf("DEBUG: Adding regex ACL: %+v\n", acl)
+		}
+
+		acls = append(acls, acl)
 
 		// Add backend switching rule
 		backendRules = append(backendRules, map[string]interface{}{

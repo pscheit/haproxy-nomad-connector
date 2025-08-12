@@ -517,6 +517,205 @@ func TestClient_GetFrontendRules(t *testing.T) {
 	}
 }
 
+func TestClient_AddFrontendRuleWithType_RegexDomain(t *testing.T) {
+	// This test verifies that regex domains get the -m reg flag in ACL
+	var capturedACL map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == HTTPMethodGET && strings.Contains(r.URL.Path, "/configuration/version"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("12"))
+
+		case r.Method == HTTPMethodPOST && strings.Contains(r.URL.Path, "/transactions"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			response := map[string]interface{}{
+				"id":       "test-tx-regex",
+				"status":   "in_progress",
+				"_version": 1,
+			}
+			_ = json.NewEncoder(w).Encode(response)
+
+		case r.Method == HTTPMethodPUT && strings.Contains(r.URL.Path, "/frontends/http/acls"):
+			// Capture the ACL being set to verify the fix
+			var acls []map[string]interface{}
+			err := json.NewDecoder(r.Body).Decode(&acls)
+			if err != nil {
+				t.Errorf("Failed to decode ACL request: %v", err)
+				return
+			}
+			if len(acls) > 0 {
+				capturedACL = acls[0]
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(acls)
+
+		case r.Method == HTTPMethodPUT && strings.Contains(r.URL.Path, "/frontends/http/backend_switching_rules"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			response := []map[string]interface{}{
+				{
+					"cond":      "if",
+					"cond_test": "is_test_backend_service_60d0d8c1",
+					"name":      "test_backend_service",
+				},
+			}
+			_ = json.NewEncoder(w).Encode(response)
+
+		case r.Method == HTTPMethodGET && strings.Contains(r.URL.Path, "/frontends/http/acls"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]interface{}{})
+
+		case r.Method == HTTPMethodGET && strings.Contains(r.URL.Path, "/frontends/http/backend_switching_rules"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]interface{}{})
+
+		case r.Method == HTTPMethodPUT && strings.Contains(r.URL.Path, "/transactions/test-tx-regex"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			response := map[string]interface{}{
+				"id":     "test-tx-regex",
+				"status": "success",
+			}
+			_ = json.NewEncoder(w).Encode(response)
+
+		default:
+			t.Errorf("Unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "admin", "password")
+
+	// Test with regex domain pattern - should add match_method: "reg"
+	regexDomain := "^(api\\.|www\\.)?test-regex\\.com$"
+	backend := "test_backend_service"
+
+	err := client.AddFrontendRuleWithType("http", regexDomain, backend, DomainTypeRegex)
+	if err != nil {
+		t.Fatalf("AddFrontendRuleWithType failed: %v", err)
+	}
+
+	// Verify the ACL includes match_method: "reg" for regex domains
+	if capturedACL == nil {
+		t.Fatal("No ACL was captured")
+	}
+
+	// Check required fields
+	if capturedACL["criterion"] != "hdr(host)" {
+		t.Errorf("Expected criterion 'hdr(host)', got %v", capturedACL["criterion"])
+	}
+	expectedValue := "-m reg " + regexDomain
+	if capturedACL["value"] != expectedValue {
+		t.Errorf("Expected value '%s', got %v", expectedValue, capturedACL["value"])
+	}
+
+	// CRITICAL: Check that the value contains -m reg for regex domains
+	if !strings.Contains(capturedACL["value"].(string), "-m reg") {
+		t.Errorf("Expected value to contain '-m reg' for regex domain, got %v", capturedACL["value"])
+	}
+}
+
+func TestClient_AddFrontendRuleWithType_ExactDomain(t *testing.T) {
+	// This test verifies that exact domains do NOT get the -m reg flag
+	var capturedACL map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == HTTPMethodGET && strings.Contains(r.URL.Path, "/configuration/version"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("12"))
+
+		case r.Method == HTTPMethodPOST && strings.Contains(r.URL.Path, "/transactions"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			response := map[string]interface{}{
+				"id":       "test-tx-exact",
+				"status":   "in_progress",
+				"_version": 1,
+			}
+			_ = json.NewEncoder(w).Encode(response)
+
+		case r.Method == HTTPMethodPUT && strings.Contains(r.URL.Path, "/frontends/http/acls"):
+			var acls []map[string]interface{}
+			err := json.NewDecoder(r.Body).Decode(&acls)
+			if err != nil {
+				t.Errorf("Failed to decode ACL request: %v", err)
+				return
+			}
+			if len(acls) > 0 {
+				capturedACL = acls[0]
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(acls)
+
+		case r.Method == HTTPMethodPUT && strings.Contains(r.URL.Path, "/frontends/http/backend_switching_rules"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]interface{}{})
+
+		case r.Method == HTTPMethodGET && strings.Contains(r.URL.Path, "/frontends/http/acls"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]interface{}{})
+
+		case r.Method == HTTPMethodGET && strings.Contains(r.URL.Path, "/frontends/http/backend_switching_rules"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]interface{}{})
+
+		case r.Method == HTTPMethodPUT && strings.Contains(r.URL.Path, "/transactions/test-tx-exact"):
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			response := map[string]interface{}{
+				"id":     "test-tx-exact",
+				"status": "success",
+			}
+			_ = json.NewEncoder(w).Encode(response)
+
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "admin", "password")
+
+	// Test with exact domain - should NOT have match_method
+	exactDomain := "example.com"
+	backend := "example_backend"
+
+	err := client.AddFrontendRuleWithType("http", exactDomain, backend, DomainTypeExact)
+	if err != nil {
+		t.Fatalf("AddFrontendRuleWithType failed: %v", err)
+	}
+
+	// Verify the ACL does NOT include match_method for exact domains
+	if capturedACL == nil {
+		t.Fatal("No ACL was captured")
+	}
+
+	if capturedACL["criterion"] != "hdr(host)" {
+		t.Errorf("Expected criterion 'hdr(host)', got %v", capturedACL["criterion"])
+	}
+	if capturedACL["value"] != exactDomain {
+		t.Errorf("Expected value '%s', got %v", exactDomain, capturedACL["value"])
+	}
+
+	// CRITICAL: Check that match_method is NOT set for exact domains
+	if _, hasMatchMethod := capturedACL["match_method"]; hasMatchMethod {
+		t.Errorf("Expected no match_method for exact domain, but got %v", capturedACL["match_method"])
+	}
+}
+
 func TestClient_AddFrontendRule_RegexDomain(t *testing.T) {
 	// This test verifies that ACL names are generated from backend names, not domain patterns
 	// The fix should use backend name to create valid ACL names

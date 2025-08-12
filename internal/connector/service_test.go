@@ -202,6 +202,10 @@ func (m *mockHAProxyClient) AddFrontendRule(frontend, domain, backend string) er
 	return m.addFrontendRuleError
 }
 
+func (m *mockHAProxyClient) AddFrontendRuleWithType(frontend, domain, backend string, domainType haproxy.DomainType) error {
+	return m.AddFrontendRule(frontend, domain, backend)
+}
+
 func (m *mockHAProxyClient) RemoveFrontendRule(frontend, domain string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -260,6 +264,7 @@ func TestHandleServiceDeregistrationWithDrainTimeout_DrainSuccess(t *testing.T) 
 		context.Background(),
 		mockClient,
 		event,
+		testConfig(),
 		2, // 2 second drain timeout for test
 		logger,
 	)
@@ -313,6 +318,7 @@ func TestHandleServiceDeregistrationWithDrainTimeout_DrainFails(t *testing.T) {
 		context.Background(),
 		mockClient,
 		event,
+		testConfig(),
 		2, // 2 second drain timeout for test
 		logger,
 	)
@@ -356,7 +362,7 @@ func TestProcessServiceEventWithDomainTag_CreatesFrontendRule(t *testing.T) {
 		},
 	}
 
-	result, err := ProcessServiceEvent(context.Background(), mockClient, event)
+	result, err := ProcessServiceEvent(context.Background(), mockClient, event, testConfig())
 	if err != nil {
 		t.Fatalf("ProcessServiceEvent() failed: %v", err)
 	}
@@ -412,7 +418,7 @@ func TestProcessServiceEventWithDomainTag_RemovesFrontendRule(t *testing.T) {
 		},
 	}
 
-	result, err := ProcessServiceEvent(context.Background(), mockClient, event)
+	result, err := ProcessServiceEvent(context.Background(), mockClient, event, testConfig())
 	if err != nil {
 		t.Fatalf("ProcessServiceEvent() failed: %v", err)
 	}
@@ -469,7 +475,7 @@ func TestProcessServiceEventWithDomainTag_ExistingServer_ShouldStillCreateFronte
 		},
 	}
 
-	result, err := ProcessServiceEvent(context.Background(), mockClient, event)
+	result, err := ProcessServiceEvent(context.Background(), mockClient, event, testConfig())
 	if err != nil {
 		t.Fatalf("ProcessServiceEvent() failed: %v", err)
 	}
@@ -524,7 +530,7 @@ func TestProcessServiceEventWithHealthCheckAndConfig_WithDomainTag(t *testing.T)
 		nil, // nil nomad client for testing
 		event,
 		logger,
-		30, // drain timeout
+		testConfig(),
 	)
 
 	if err != nil {
@@ -575,6 +581,7 @@ func TestHandleServiceRegistrationWithHealthCheck_WithDomainTag(t *testing.T) {
 		nil, // nil nomad client for testing
 		event,
 		logger,
+		expectedFrontend,
 	)
 
 	if err != nil {
@@ -628,7 +635,7 @@ func TestHealthCheckWithDomainTagIntegration(t *testing.T) {
 		nil, // nil nomad client for testing
 		event,
 		logger,
-		30, // drain timeout
+		testConfig(),
 	)
 
 	if err != nil {
@@ -668,7 +675,7 @@ func TestHealthCheckWithDomainTagIntegration(t *testing.T) {
 		nil, // nil nomad client for testing
 		event,
 		logger,
-		30, // drain timeout
+		testConfig(),
 	)
 
 	if err != nil {

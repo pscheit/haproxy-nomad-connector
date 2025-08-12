@@ -43,16 +43,21 @@ type Service struct {
 }
 
 // ProcessServiceEvent processes a Nomad service event and updates HAProxy
-func ProcessServiceEvent(ctx context.Context, client haproxy.ClientInterface, event *ServiceEvent) (interface{}, error) {
+func ProcessServiceEvent(
+	ctx context.Context,
+	client haproxy.ClientInterface,
+	event *ServiceEvent,
+	cfg *config.Config,
+) (interface{}, error) {
 	// Classify service based on tags
 	serviceType := classifyService(event.Service.Tags)
 	fmt.Printf("DEBUG: Service %s classified as %s with tags: %v\n", event.Service.ServiceName, serviceType, event.Service.Tags)
 
 	switch serviceType {
 	case haproxy.ServiceTypeDynamic:
-		return processDynamicService(ctx, client, event)
+		return processDynamicService(ctx, client, event, cfg)
 	case haproxy.ServiceTypeCustom:
-		return processCustomService(ctx, client, event)
+		return processCustomService(ctx, client, event, cfg)
 	case haproxy.ServiceTypeStatic:
 		// Static services - no action needed
 		return map[string]string{"status": "ignored", "reason": "static service"}, nil
@@ -68,6 +73,7 @@ func ProcessNomadServiceEvent(
 	nomadClient *nomad.Client,
 	event nomad.ServiceEvent,
 	logger *log.Logger,
+	cfg *config.Config,
 ) (interface{}, error) {
 	if event.Payload.Service == nil {
 		return nil, fmt.Errorf("event payload missing service data")
@@ -90,19 +96,10 @@ func ProcessNomadServiceEvent(
 	logger.Printf("Processing %s for service %s at %s:%d",
 		event.Type, svc.ServiceName, svc.Address, svc.Port)
 
-	return ProcessServiceEventWithHealthCheck(ctx, haproxyClient, nomadClient, &serviceEvent, logger)
+	return ProcessServiceEventWithHealthCheckAndConfig(ctx, haproxyClient, nomadClient, &serviceEvent, logger, cfg)
 }
 
 // ProcessServiceEventWithHealthCheck processes a service event with health check synchronization from Nomad
-func ProcessServiceEventWithHealthCheck(
-	ctx context.Context,
-	haproxyClient haproxy.ClientInterface,
-	nomadClient *nomad.Client,
-	event *ServiceEvent,
-	logger *log.Logger,
-) (interface{}, error) {
-	return ProcessServiceEventWithHealthCheckAndConfig(ctx, haproxyClient, nomadClient, event, logger, config.DefaultDrainTimeoutSec)
-}
 
 // ProcessServiceEventWithHealthCheckAndConfig processes a service event with configurable drain timeout
 func ProcessServiceEventWithHealthCheckAndConfig(
@@ -111,17 +108,17 @@ func ProcessServiceEventWithHealthCheckAndConfig(
 	nomadClient *nomad.Client,
 	event *ServiceEvent,
 	logger *log.Logger,
-	drainTimeoutSec int,
+	cfg *config.Config,
 ) (interface{}, error) {
 	// Classify service based on tags
 	serviceType := classifyService(event.Service.Tags)
 
 	switch serviceType {
 	case haproxy.ServiceTypeDynamic:
-		return processDynamicServiceWithHealthCheckAndConfig(ctx, haproxyClient, nomadClient, event, logger, drainTimeoutSec)
+		return processDynamicServiceWithHealthCheckAndConfig(ctx, haproxyClient, nomadClient, event, logger, cfg.HAProxy.DrainTimeoutSec, cfg)
 	case haproxy.ServiceTypeCustom:
 		// TODO: Implement custom service with health check and drain timeout
-		return ProcessServiceEvent(ctx, haproxyClient, event)
+		return ProcessServiceEvent(ctx, haproxyClient, event, cfg)
 	case haproxy.ServiceTypeStatic:
 		return map[string]string{"status": "ignored", "reason": "static service"}, nil
 	default:
@@ -162,12 +159,13 @@ func processDynamicService(
 	ctx context.Context,
 	client haproxy.ClientInterface,
 	event *ServiceEvent,
+	cfg *config.Config,
 ) (interface{}, error) {
 	switch event.Type {
 	case "ServiceRegistration":
-		return handleServiceRegistration(ctx, client, event)
+		return handleServiceRegistration(ctx, client, event, cfg)
 	case "ServiceDeregistration":
-		return handleServiceDeregistration(ctx, client, event)
+		return handleServiceDeregistration(ctx, client, event, cfg)
 	default:
 		return map[string]string{"status": "skipped", "reason": "unknown event type"}, nil
 	}
@@ -181,12 +179,13 @@ func processDynamicServiceWithHealthCheckAndConfig(
 	event *ServiceEvent,
 	logger *log.Logger,
 	drainTimeoutSec int,
+	cfg *config.Config,
 ) (interface{}, error) {
 	switch event.Type {
 	case "ServiceRegistration":
-		return handleServiceRegistrationWithHealthCheck(ctx, client, nomadClient, event, logger)
+		return handleServiceRegistrationWithHealthCheck(ctx, client, nomadClient, event, logger, cfg.HAProxy.Frontend)
 	case "ServiceDeregistration":
-		return handleServiceDeregistrationWithDrainTimeout(ctx, client, event, drainTimeoutSec, logger)
+		return handleServiceDeregistrationWithDrainTimeout(ctx, client, event, cfg, drainTimeoutSec, logger)
 	default:
 		return map[string]string{"status": "skipped", "reason": "unknown event type"}, nil
 	}
@@ -196,6 +195,7 @@ func handleServiceRegistration(
 	_ context.Context,
 	client haproxy.ClientInterface,
 	event *ServiceEvent,
+	cfg *config.Config,
 ) (interface{}, error) {
 	version, err := client.GetConfigVersion()
 	if err != nil {
@@ -230,7 +230,8 @@ func handleServiceRegistration(
 	}
 
 	// ALWAYS reconcile frontend rules (regardless of server existence)
-	if err := reconcileFrontendRule(client, event.Service.ServiceName, event.Service.Tags, backendName, result); err != nil {
+	err = reconcileFrontendRule(client, event.Service.ServiceName, event.Service.Tags, backendName, result, cfg.HAProxy.Frontend)
+	if err != nil {
 		return nil, err
 	}
 
@@ -297,6 +298,7 @@ func reconcileFrontendRule(
 	tags []string,
 	backendName string,
 	result map[string]string,
+	frontendName string,
 ) error {
 	domainMapping := parseDomainMapping(serviceName, tags)
 	if domainMapping == nil {
@@ -307,7 +309,7 @@ func reconcileFrontendRule(
 	fmt.Printf("DEBUG: Reconciling frontend rule for service %s: %s -> %s\n", serviceName, domainMapping.Domain, backendName)
 
 	// Check if rule already exists
-	existingRules, err := client.GetFrontendRules("https")
+	existingRules, err := client.GetFrontendRules(frontendName)
 	if err != nil {
 		fmt.Printf("DEBUG: Failed to get existing rules: %v\n", err)
 	}
@@ -320,7 +322,7 @@ func reconcileFrontendRule(
 		}
 	}
 
-	err = client.AddFrontendRule("https", domainMapping.Domain, backendName)
+	err = client.AddFrontendRuleWithType(frontendName, domainMapping.Domain, backendName, domainMapping.Type)
 	if err != nil {
 		return fmt.Errorf("failed to create frontend rule for domain %s: %w", domainMapping.Domain, err)
 	}
@@ -333,14 +335,16 @@ func handleServiceDeregistration(
 	ctx context.Context,
 	client haproxy.ClientInterface,
 	event *ServiceEvent,
+	cfg *config.Config,
 ) (interface{}, error) {
-	return handleServiceDeregistrationWithDrainTimeout(ctx, client, event, config.DefaultDrainTimeoutSec, nil)
+	return handleServiceDeregistrationWithDrainTimeout(ctx, client, event, cfg, config.DefaultDrainTimeoutSec, nil)
 }
 
 func handleServiceDeregistrationWithDrainTimeout(
 	_ context.Context,
 	client haproxy.ClientInterface,
 	event *ServiceEvent,
+	cfg *config.Config,
 	drainTimeoutSec int,
 	logger *log.Logger,
 ) (interface{}, error) {
@@ -363,7 +367,7 @@ func handleServiceDeregistrationWithDrainTimeout(
 
 	// Handle frontend rule removal if this was the only instance
 	if isLastServer {
-		removeFrontendRule(client, event.Service.ServiceName, event.Service.Tags, result)
+		removeFrontendRule(client, event.Service.ServiceName, event.Service.Tags, result, cfg.HAProxy.Frontend)
 	}
 
 	return result, nil
@@ -436,13 +440,13 @@ func scheduleDelayedServerRemoval(
 }
 
 // removeFrontendRule removes frontend rule when service has domain tags
-func removeFrontendRule(client haproxy.ClientInterface, serviceName string, tags []string, result map[string]string) {
+func removeFrontendRule(client haproxy.ClientInterface, serviceName string, tags []string, result map[string]string, frontendName string) {
 	domainMapping := parseDomainMapping(serviceName, tags)
 	if domainMapping == nil {
 		return
 	}
 
-	err := client.RemoveFrontendRule("https", domainMapping.Domain)
+	err := client.RemoveFrontendRule(frontendName, domainMapping.Domain)
 	if err != nil {
 		result["frontend_rule_warning"] = fmt.Sprintf("failed to remove frontend rule: %v", err)
 	} else {
@@ -455,6 +459,7 @@ func processCustomService(
 	_ context.Context,
 	_ haproxy.ClientInterface,
 	_ *ServiceEvent,
+	_ *config.Config,
 ) (interface{}, error) {
 	// TODO: Implement custom backend server management with domain mapping
 	return map[string]string{"status": "todo", "reason": "custom backend not implemented"}, nil
@@ -467,6 +472,7 @@ func handleServiceRegistrationWithHealthCheck(
 	nomadClient *nomad.Client,
 	event *ServiceEvent,
 	logger *log.Logger,
+	frontendName string,
 ) (interface{}, error) {
 	version, err := client.GetConfigVersion()
 	if err != nil {
@@ -517,7 +523,7 @@ func handleServiceRegistrationWithHealthCheck(
 			}
 
 			// ALWAYS reconcile frontend rules (regardless of server existence)
-			reconcileErr := reconcileFrontendRule(client, event.Service.ServiceName, event.Service.Tags, backendName, result)
+			reconcileErr := reconcileFrontendRule(client, event.Service.ServiceName, event.Service.Tags, backendName, result, frontendName)
 			if reconcileErr != nil {
 				return nil, reconcileErr
 			}
@@ -554,7 +560,7 @@ func handleServiceRegistrationWithHealthCheck(
 	}
 
 	// ALWAYS reconcile frontend rules (regardless of server existence)
-	if err := reconcileFrontendRule(client, event.Service.ServiceName, event.Service.Tags, backendName, result); err != nil {
+	if err := reconcileFrontendRule(client, event.Service.ServiceName, event.Service.Tags, backendName, result, frontendName); err != nil {
 		return nil, err
 	}
 

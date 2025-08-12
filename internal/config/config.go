@@ -30,6 +30,7 @@ type HAProxyConfig struct {
 	Password        string `json:"password"`
 	BackendStrategy string `json:"backend_strategy"`
 	DrainTimeoutSec int    `json:"drain_timeout_sec"` // Time to wait before removing drained servers
+	Frontend        string `json:"frontend"`          // Frontend name for domain rules
 }
 
 type LogConfig struct {
@@ -51,6 +52,7 @@ func Load(configFile string) (*Config, error) {
 			Password:        getEnv("HAPROXY_PASSWORD", "adminpwd"),
 			BackendStrategy: getEnv("HAPROXY_BACKEND_STRATEGY", "use_existing"),
 			DrainTimeoutSec: getEnvInt("HAPROXY_DRAIN_TIMEOUT_SEC", DefaultDrainTimeoutSec),
+			Frontend:        getEnv("HAPROXY_FRONTEND", "https"),
 		},
 		Log: LogConfig{
 			Level: getEnv("LOG_LEVEL", "info"),

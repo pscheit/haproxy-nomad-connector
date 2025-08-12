@@ -4,8 +4,18 @@ import (
 	"context"
 	"testing"
 
+	"github.com/pscheit/haproxy-nomad-connector/internal/config"
 	"github.com/pscheit/haproxy-nomad-connector/internal/haproxy"
 )
+
+// testConfig returns a default config for testing
+func testConfig() *config.Config {
+	return &config.Config{
+		HAProxy: config.HAProxyConfig{
+			Frontend: "https",
+		},
+	}
+}
 
 // MockHAProxyClient for testing
 type MockHAProxyClient struct {
@@ -105,6 +115,10 @@ func (m *MockHAProxyClient) AddFrontendRule(frontend, domain, backend string) er
 	return nil
 }
 
+func (m *MockHAProxyClient) AddFrontendRuleWithType(frontend, domain, backend string, domainType haproxy.DomainType) error {
+	return m.AddFrontendRule(frontend, domain, backend)
+}
+
 func (m *MockHAProxyClient) RemoveFrontendRule(frontend, domain string) error {
 	// Mock implementation - no-op for existing tests
 	return nil
@@ -135,7 +149,7 @@ func TestServiceRegistrationWithDomainMapping(t *testing.T) {
 	}
 
 	// Process event
-	result, err := ProcessServiceEvent(context.Background(), client, &event)
+	result, err := ProcessServiceEvent(context.Background(), client, &event, testConfig())
 	if err != nil {
 		t.Fatalf("ProcessServiceEvent() failed: %v", err)
 	}
@@ -197,7 +211,7 @@ func TestServiceDeregistrationWithDomainMapping(t *testing.T) {
 		},
 	}
 
-	_, err := ProcessServiceEvent(context.Background(), client, &registerEvent)
+	_, err := ProcessServiceEvent(context.Background(), client, &registerEvent, testConfig())
 	if err != nil {
 		t.Fatalf("Service registration failed: %v", err)
 	}
@@ -216,7 +230,7 @@ func TestServiceDeregistrationWithDomainMapping(t *testing.T) {
 		},
 	}
 
-	result, err := ProcessServiceEvent(context.Background(), client, &deregisterEvent)
+	result, err := ProcessServiceEvent(context.Background(), client, &deregisterEvent, testConfig())
 	if err != nil {
 		t.Fatalf("Service deregistration failed: %v", err)
 	}
@@ -263,7 +277,7 @@ func TestServiceRegistrationWithoutDomainMapping(t *testing.T) {
 		},
 	}
 
-	result, err := ProcessServiceEvent(context.Background(), client, &event)
+	result, err := ProcessServiceEvent(context.Background(), client, &event, testConfig())
 	if err != nil {
 		t.Fatalf("ProcessServiceEvent() failed: %v", err)
 	}
@@ -297,7 +311,7 @@ func TestProcessServiceEventWithoutDomainMapManager(t *testing.T) {
 	}
 
 	// Process without domain map manager (nil)
-	result, err := ProcessServiceEvent(context.Background(), client, &event)
+	result, err := ProcessServiceEvent(context.Background(), client, &event, testConfig())
 	if err != nil {
 		t.Fatalf("ProcessServiceEvent() failed: %v", err)
 	}

@@ -102,8 +102,9 @@ type DomainMapConfig struct {
 
 // FrontendRule represents a domain-to-backend routing rule
 type FrontendRule struct {
-	Domain  string `json:"domain"`
-	Backend string `json:"backend"`
+	Domain  string     `json:"domain"`
+	Backend string     `json:"backend"`
+	Type    DomainType `json:"type,omitempty"` // Domain matching type
 }
 
 // APIError represents an API error response
@@ -134,6 +135,7 @@ type ClientInterface interface {
 
 	// Frontend rule management
 	AddFrontendRule(frontend, domain, backend string) error
+	AddFrontendRuleWithType(frontend, domain, backend string, domainType DomainType) error
 	RemoveFrontendRule(frontend, domain string) error
 	GetFrontendRules(frontend string) ([]FrontendRule, error)
 }

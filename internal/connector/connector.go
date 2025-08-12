@@ -132,7 +132,7 @@ func (c *Connector) processNomadServiceEventWithConfig(ctx context.Context, even
 		c.nomadClient,
 		&serviceEvent,
 		c.logger,
-		c.config.HAProxy.DrainTimeoutSec,
+		c.config,
 	)
 
 	// Enhanced logging with frontend rule status
@@ -169,7 +169,7 @@ func (c *Connector) syncExistingServices(ctx context.Context) error {
 			},
 		}
 
-		if result, err := ProcessNomadServiceEvent(ctx, c.haproxyClient, c.nomadClient, event, c.logger); err != nil {
+		if result, err := ProcessNomadServiceEvent(ctx, c.haproxyClient, c.nomadClient, event, c.logger, c.config); err != nil {
 			c.logger.Printf("Failed to sync service %s: %v", svc.ServiceName, err)
 		} else {
 			if resultMap, ok := result.(map[string]string); ok && resultMap["status"] == StatusCreated {

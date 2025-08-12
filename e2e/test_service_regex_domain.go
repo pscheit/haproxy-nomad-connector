@@ -6,10 +6,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/pscheit/haproxy-nomad-connector/internal/config"
 	"github.com/pscheit/haproxy-nomad-connector/internal/connector"
 	"github.com/pscheit/haproxy-nomad-connector/internal/haproxy"
 )
@@ -26,7 +28,7 @@ func main() {
 
 	// Reset HAProxy frontend rules before starting the test
 	fmt.Println("\n🧹 Resetting HAProxy frontend rules to clean state...")
-	err := client.ResetFrontendRules("https")
+	err := client.ResetFrontendRules("http")
 	if err != nil {
 		fmt.Printf("❌ Failed to reset frontend rules: %v\n", err)
 		os.Exit(1)
@@ -39,9 +41,9 @@ func main() {
 	serviceEvent := connector.ServiceEvent{
 		Type: "ServiceRegistration",
 		Service: connector.Service{
-			ServiceName: "test-backend-service",
-			Address:     "127.0.0.1",
-			Port:        3001, // Points to our test-backend nginx container
+			ServiceName: "test-backend-service", 
+			Address:     "test-backend",
+			Port:        80, // Points to our test-backend nginx container
 			Tags: []string{
 				"haproxy.enable=true",
 				"haproxy.domain=^(api\\.|www\\.)?test-regex\\.com$",
@@ -57,7 +59,14 @@ func main() {
 
 	// Process event through connector - this should succeed completely
 	fmt.Println("\n1️⃣ Processing service event through connector...")
-	result, err2 := connector.ProcessServiceEvent(ctx, client, &serviceEvent)
+	// Create config for test
+	cfg := &config.Config{
+		HAProxy: config.HAProxyConfig{
+			Frontend: "http",
+		},
+	}
+	
+	result, err2 := connector.ProcessServiceEvent(ctx, client, &serviceEvent, cfg)
 
 	if err2 != nil {
 		fmt.Printf("❌ Service processing failed: %v\n", err2)
@@ -89,7 +98,7 @@ func main() {
 
 	// Verify frontend rules were created
 	fmt.Println("\n3️⃣ Verifying frontend rule creation...")
-	rules, err := client.GetFrontendRules("https")
+	rules, err := client.GetFrontendRules("http")
 	if err != nil {
 		fmt.Printf("❌ Failed to get frontend rules: %v\n", err)
 		os.Exit(1)
@@ -110,10 +119,8 @@ func main() {
 	}
 	fmt.Printf("✅ Frontend rule found for regex domain\n")
 
-	// Test actual HTTP routing through HAProxy
-	fmt.Println("\n4️⃣ Testing HTTP routing through HAProxy...")
+	fmt.Println("\n4️⃣ Testing HTTP backend routing through HAProxy...")
 
-	// Test domains that should match the regex ^(api\.|www\.)?test-regex\.com$
 	testCases := []struct {
 		host        string
 		shouldMatch bool
@@ -129,7 +136,6 @@ func main() {
 	for _, tc := range testCases {
 		fmt.Printf("   Testing %s (%s)... ", tc.host, tc.description)
 
-		// Create HTTP request directly to HAProxy with Host header
 		req, err := http.NewRequest("GET", "http://localhost:8080/", nil)
 		if err != nil {
 			fmt.Printf("❌ Failed to create request: %v\n", err)
@@ -137,46 +143,62 @@ func main() {
 		}
 		req.Host = tc.host
 
-		// HTTP client that doesn't follow redirects
 		httpClient := &http.Client{
 			Timeout: 5 * time.Second,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				return http.ErrUseLastResponse // Don't follow redirects
+				return http.ErrUseLastResponse
 			},
 		}
 		resp, err := httpClient.Do(req)
 
 		if tc.shouldMatch {
 			if err != nil {
-				fmt.Printf("❌ Expected routing to work: %v\n", err)
+				fmt.Printf("❌ Expected routing to backend but got error: %v\n", err)
 				os.Exit(1)
 			}
-			// HAProxy redirects HTTP to HTTPS (301) for matching domains
-			if resp.StatusCode != 301 && resp.StatusCode != 200 {
-				fmt.Printf("❌ Expected 301 or 200, got %d\n", resp.StatusCode)
+			
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				fmt.Printf("❌ Failed to read response body: %v\n", err)
 				os.Exit(1)
 			}
-			// Check that redirect location contains our domain
-			if resp.StatusCode == 301 {
-				location := resp.Header.Get("Location")
-				if location == "" || location != "https://"+tc.host+"/" {
-					fmt.Printf("❌ Wrong redirect location: %s\n", location)
+			resp.Body.Close()
+			
+			fmt.Printf("DEBUG: Response status: %d, body: %s\n", resp.StatusCode, string(body))
+			
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				fmt.Printf("✅ Routed to backend (status: %d, body length: %d)\n", resp.StatusCode, len(body))
+			} else if resp.StatusCode == 503 {
+				fmt.Printf("❌ Backend unavailable (503) - service not properly registered\n")
+				os.Exit(1)
+			} else {
+				fmt.Printf("❌ Unexpected response from backend: %d, expected 200\n", resp.StatusCode)
+				os.Exit(1)
+			}
+		} else {
+			if err != nil {
+				fmt.Printf("❌ Request should reach default backend but got error: %v\n", err)
+				os.Exit(1)
+			} else {
+				body, err := io.ReadAll(resp.Body)
+				if err != nil {
+					fmt.Printf("❌ Failed to read response body: %v\n", err)
+					os.Exit(1)
+				}
+				resp.Body.Close()
+				
+				if resp.StatusCode == 404 {
+					bodyStr := string(body)
+					if bodyStr == "404 - Domain not found" {
+						fmt.Printf("✅ Got 404 from default backend as expected\n")
+					} else {
+						fmt.Printf("✅ Got 404 but unexpected body: %s\n", bodyStr)
+					}
+				} else {
+					fmt.Printf("❌ Expected 404 from default backend, got %d\n", resp.StatusCode)
 					os.Exit(1)
 				}
 			}
-			fmt.Printf("✅ Routed correctly (status: %d)\n", resp.StatusCode)
-		} else {
-			// HAProxy has a default redirect rule, so non-matching still gets 301
-			// The key test is that our regex domain rules were created without ACL errors
-			if err != nil {
-				fmt.Printf("❌ HTTP request failed: %v\n", err)
-				os.Exit(1)
-			}
-			fmt.Printf("✅ Request processed (status: %d)\n", resp.StatusCode)
-		}
-
-		if resp != nil {
-			resp.Body.Close()
 		}
 	}
 
