@@ -4,7 +4,6 @@ services:
     container_name: haproxy-test
     ports:
       - "8080:80"
-      - "8443:443" 
       - "8099:8099"  # stats
       - "5555:5555"  # Data Plane API
     volumes:

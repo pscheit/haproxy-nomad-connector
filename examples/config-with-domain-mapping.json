@@ -10,10 +10,6 @@
     "password": "adminpwd",
     "backend_strategy": "use_existing"
   },
-  "domain_map": {
-    "enabled": true,
-    "file_path": "/etc/haproxy2/domain-backend.map"
-  },
   "log": {
     "level": "info"
   }
