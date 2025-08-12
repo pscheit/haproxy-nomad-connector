@@ -107,14 +107,29 @@ func TestGenerateServerName(t *testing.T) {
 
 // mockHAProxyClient implements haproxy.ClientInterface for testing
 type mockHAProxyClient struct {
-	mu                sync.Mutex
-	drainCalled       bool
-	deleteCalled      bool
-	drainError        error
-	deleteError       error
-	getVersionError   error
-	getServersServers []haproxy.Server
-	getServersError   error
+	mu                     sync.Mutex
+	drainCalled            bool
+	deleteCalled           bool
+	drainError             error
+	deleteError            error
+	getVersionError        error
+	getServersServers      []haproxy.Server
+	getServersError        error
+	addFrontendRuleCalls      []FrontendRuleCall
+	addFrontendRuleError      error
+	removeFrontendRuleCalls   []RemoveFrontendRuleCall
+	removeFrontendRuleError   error
+}
+
+type FrontendRuleCall struct {
+	Frontend string
+	Domain   string
+	Backend  string
+}
+
+type RemoveFrontendRuleCall struct {
+	Frontend string
+	Domain   string
 }
 
 func (m *mockHAProxyClient) GetConfigVersion() (int, error) {
@@ -122,7 +137,7 @@ func (m *mockHAProxyClient) GetConfigVersion() (int, error) {
 }
 
 func (m *mockHAProxyClient) GetBackend(name string) (*haproxy.Backend, error) {
-	return &haproxy.Backend{Name: name}, nil
+	return nil, &haproxy.APIError{StatusCode: 404}
 }
 
 func (m *mockHAProxyClient) CreateBackend(backend haproxy.Backend, version int) (*haproxy.Backend, error) {
@@ -169,13 +184,24 @@ func (m *mockHAProxyClient) MaintainServer(backendName, serverName string) error
 
 // Frontend rule management methods (required by ClientInterface)
 func (m *mockHAProxyClient) AddFrontendRule(frontend, domain, backend string) error {
-	// Mock implementation - no-op for existing tests
-	return nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.addFrontendRuleCalls = append(m.addFrontendRuleCalls, FrontendRuleCall{
+		Frontend: frontend,
+		Domain:   domain,
+		Backend:  backend,
+	})
+	return m.addFrontendRuleError
 }
 
 func (m *mockHAProxyClient) RemoveFrontendRule(frontend, domain string) error {
-	// Mock implementation - no-op for existing tests
-	return nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.removeFrontendRuleCalls = append(m.removeFrontendRuleCalls, RemoveFrontendRuleCall{
+		Frontend: frontend,
+		Domain:   domain,
+	})
+	return m.removeFrontendRuleError
 }
 
 func (m *mockHAProxyClient) GetFrontendRules(frontend string) ([]haproxy.FrontendRule, error) {
@@ -194,6 +220,18 @@ func (m *mockHAProxyClient) wasDeleteCalled() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.deleteCalled
+}
+
+func (m *mockHAProxyClient) getAddFrontendRuleCalls() []FrontendRuleCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]FrontendRuleCall{}, m.addFrontendRuleCalls...)
+}
+
+func (m *mockHAProxyClient) getRemoveFrontendRuleCalls() []RemoveFrontendRuleCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]RemoveFrontendRuleCall{}, m.removeFrontendRuleCalls...)
 }
 
 func TestHandleServiceDeregistrationWithDrainTimeout_DrainSuccess(t *testing.T) {
@@ -296,5 +334,109 @@ func TestHandleServiceDeregistrationWithDrainTimeout_DrainFails(t *testing.T) {
 
 	if resultMap["method"] != MethodImmediateDeletion {
 		t.Errorf("Expected method '%s', got %s", MethodImmediateDeletion, resultMap["method"])
+	}
+}
+
+func TestProcessServiceEventWithDomainTag_CreatesFrontendRule(t *testing.T) {
+	mockClient := &mockHAProxyClient{}
+	
+	event := &ServiceEvent{
+		Type: "ServiceRegistration",
+		Service: Service{
+			ServiceName: "api-service",
+			Address:     "10.0.0.1",
+			Port:        8080,
+			Tags:        []string{"haproxy.enable=true", "haproxy.domain=api.example.com"},
+		},
+	}
+
+	result, err := ProcessServiceEvent(context.Background(), mockClient, event)
+	if err != nil {
+		t.Fatalf("ProcessServiceEvent() failed: %v", err)
+	}
+
+	resultMap, ok := result.(map[string]string)
+	if !ok {
+		t.Fatal("Expected result to be map[string]string")
+	}
+
+	if resultMap["status"] != StatusCreated {
+		t.Errorf("Expected status '%s', got %s", StatusCreated, resultMap["status"])
+	}
+
+	// Verify that AddFrontendRule was called correctly
+	calls := mockClient.getAddFrontendRuleCalls()
+	if len(calls) != 1 {
+		t.Errorf("Expected 1 AddFrontendRule call, got %d", len(calls))
+	}
+	
+	if len(calls) > 0 {
+		call := calls[0]
+		expectedFrontend := "https"
+		expectedDomain := "api.example.com"
+		expectedBackend := "api_service"
+		
+		if call.Frontend != expectedFrontend {
+			t.Errorf("Expected frontend '%s', got '%s'", expectedFrontend, call.Frontend)
+		}
+		if call.Domain != expectedDomain {
+			t.Errorf("Expected domain '%s', got '%s'", expectedDomain, call.Domain)
+		}
+		if call.Backend != expectedBackend {
+			t.Errorf("Expected backend '%s', got '%s'", expectedBackend, call.Backend)
+		}
+	}
+}
+
+func TestProcessServiceEventWithDomainTag_RemovesFrontendRule(t *testing.T) {
+	// Configure mock to return 1 server (the one being removed)
+	mockClient := &mockHAProxyClient{
+		getServersServers: []haproxy.Server{
+			{Name: "api_service_10_0_0_1_8080"},
+		},
+	}
+	
+	event := &ServiceEvent{
+		Type: "ServiceDeregistration",
+		Service: Service{
+			ServiceName: "api-service",
+			Address:     "10.0.0.1",
+			Port:        8080,
+			Tags:        []string{"haproxy.enable=true", "haproxy.domain=api.example.com"},
+		},
+	}
+
+	result, err := ProcessServiceEvent(context.Background(), mockClient, event)
+	if err != nil {
+		t.Fatalf("ProcessServiceEvent() failed: %v", err)
+	}
+
+	resultMap, ok := result.(map[string]string)
+	if !ok {
+		t.Fatal("Expected result to be map[string]string")
+	}
+
+	// Should be draining status for graceful deregistration
+	if resultMap["status"] != StatusDraining {
+		t.Errorf("Expected status '%s', got %s", StatusDraining, resultMap["status"])
+	}
+
+	// Verify that RemoveFrontendRule was called correctly
+	calls := mockClient.getRemoveFrontendRuleCalls()
+	if len(calls) != 1 {
+		t.Errorf("Expected 1 RemoveFrontendRule call, got %d", len(calls))
+	}
+	
+	if len(calls) > 0 {
+		call := calls[0]
+		expectedFrontend := "https"
+		expectedDomain := "api.example.com"
+		
+		if call.Frontend != expectedFrontend {
+			t.Errorf("Expected frontend '%s', got '%s'", expectedFrontend, call.Frontend)
+		}
+		if call.Domain != expectedDomain {
+			t.Errorf("Expected domain '%s', got '%s'", expectedDomain, call.Domain)
+		}
 	}
 }

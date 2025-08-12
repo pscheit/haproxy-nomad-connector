@@ -289,6 +289,16 @@ func handleServiceRegistrationWithDomainMap(
 		}
 	}
 
+	// Handle frontend rule creation for domain tags
+	domainMapping := parseDomainMapping(event.Service.ServiceName, event.Service.Tags)
+	if domainMapping != nil {
+		err := client.AddFrontendRule("https", domainMapping.Domain, backendName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create frontend rule for domain %s: %w", domainMapping.Domain, err)
+		}
+		result["frontend_rule"] = fmt.Sprintf("added rule: %s -> %s", domainMapping.Domain, backendName)
+	}
+
 	return result, nil
 }
 
@@ -379,6 +389,22 @@ func handleServiceDeregistrationWithDrainTimeout(
 				} else {
 					result["domain_mapping_removed"] = domainMapping.Domain
 				}
+			}
+		}
+	}
+
+	// Handle frontend rule removal when service has domain tags
+	domainMapping := parseDomainMapping(event.Service.ServiceName, event.Service.Tags)
+	if domainMapping != nil {
+		// Check if there are other servers in the backend
+		existingServers, err := client.GetServers(backendName)
+		if err == nil && len(existingServers) <= 1 {
+			// Only this server or no servers remaining, remove frontend rule
+			err := client.RemoveFrontendRule("https", domainMapping.Domain)
+			if err != nil {
+				result["frontend_rule_warning"] = fmt.Sprintf("failed to remove frontend rule: %v", err)
+			} else {
+				result["frontend_rule_removed"] = domainMapping.Domain
 			}
 		}
 	}
