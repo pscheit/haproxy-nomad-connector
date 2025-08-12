@@ -127,7 +127,7 @@ jobs:
       uses: golangci/golangci-lint-action@v3
       with:
         version: latest
-        args: --timeout=5m
+        args: ./cmd/... ./internal/... ./test/... ./e2e/... --timeout=5m
 
   security:
     name: Security Scan
@@ -193,7 +193,7 @@ jobs:
     - name: Run integration tests
       run: |
         echo "Running HAProxy DataPlane API integration tests..."
-        go run test_frontend_rules.go
+        go run e2e/test_frontend_rules.go
     
     - name: Show HAProxy logs on failure
       if: failure()

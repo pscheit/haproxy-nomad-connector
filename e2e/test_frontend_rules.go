@@ -1,5 +1,5 @@
 // Integration test for frontend rule management with real HAProxy
-// Run with: go run test_frontend_rules.go
+// Run with: go run e2e/test_frontend_rules.go
 // Requires: docker-compose -f docker-compose.dev.yml up -d
 package main
 
