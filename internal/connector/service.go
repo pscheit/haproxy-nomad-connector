@@ -356,17 +356,27 @@ func handleServiceDeregistrationWithDrainTimeout(
 		"server":  serverName,
 	}
 
+	// Check server count BEFORE removal to determine if this is the last server
+	existingServers, err := client.GetServers(backendName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get servers for backend %s: %w", backendName, err)
+	}
+
+	// Count remaining servers after this removal (exclude the server being removed)
+	remainingServers := 0
+	for _, server := range existingServers {
+		if server.Name != serverName {
+			remainingServers++
+		}
+	}
+
 	// Handle server drain/deletion
 	if err := drainAndRemoveServer(client, backendName, serverName, drainTimeoutSec, logger, result); err != nil {
 		return nil, err
 	}
 
-	// Check if this was the last server
-	existingServers, err := client.GetServers(backendName)
-	isLastServer := err == nil && len(existingServers) <= 1
-
-	// Handle frontend rule removal if this was the only instance
-	if isLastServer {
+	// Only remove frontend rule if NO servers will remain after this removal
+	if remainingServers == 0 {
 		removeFrontendRule(client, event.Service.ServiceName, event.Service.Tags, result, cfg.HAProxy.Frontend)
 	}
 

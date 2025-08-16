@@ -1,14 +1,14 @@
 //go:build integration
 // +build integration
 
-package main
+package e2e
 
 import (
 	"context"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
+	"testing"
 	"time"
 
 	"github.com/pscheit/haproxy-nomad-connector/internal/config"
@@ -16,7 +16,10 @@ import (
 	"github.com/pscheit/haproxy-nomad-connector/internal/haproxy"
 )
 
-func main() {
+func TestServiceRegexDomain(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
 	fmt.Println("🧪 End-to-End Service Registration with Regex Domain Test")
 	fmt.Println("========================================================")
 
@@ -30,8 +33,7 @@ func main() {
 	fmt.Println("\n🧹 Resetting HAProxy frontend rules to clean state...")
 	err := client.ResetFrontendRules("http")
 	if err != nil {
-		fmt.Printf("❌ Failed to reset frontend rules: %v\n", err)
-		os.Exit(1)
+		t.Fatalf("❌ Failed to reset frontend rules: %v", err)
 	}
 	fmt.Println("✅ HAProxy frontend rules reset successfully")
 
@@ -41,7 +43,7 @@ func main() {
 	serviceEvent := connector.ServiceEvent{
 		Type: "ServiceRegistration",
 		Service: connector.Service{
-			ServiceName: "test-backend-service", 
+			ServiceName: "test-backend-service",
 			Address:     "test-backend",
 			Port:        80, // Points to our test-backend nginx container
 			Tags: []string{
@@ -65,12 +67,12 @@ func main() {
 			Frontend: "http",
 		},
 	}
-	
+
 	result, err2 := connector.ProcessServiceEvent(ctx, client, &serviceEvent, cfg)
 
 	if err2 != nil {
 		fmt.Printf("❌ Service processing failed: %v\n", err2)
-		os.Exit(1)
+		t.Fatal("test failed")
 	}
 	fmt.Printf("✅ Service processed successfully\n")
 
@@ -79,7 +81,7 @@ func main() {
 	backends, err := client.GetBackends()
 	if err != nil {
 		fmt.Printf("❌ Failed to get backends: %v\n", err)
-		os.Exit(1)
+		t.Fatal("test failed")
 	}
 
 	backendFound := false
@@ -93,7 +95,7 @@ func main() {
 
 	if !backendFound {
 		fmt.Printf("❌ Backend 'test_backend_service' not found\n")
-		os.Exit(1)
+		t.Fatal("test failed")
 	}
 
 	// Verify frontend rules were created
@@ -101,7 +103,7 @@ func main() {
 	rules, err := client.GetFrontendRules("http")
 	if err != nil {
 		fmt.Printf("❌ Failed to get frontend rules: %v\n", err)
-		os.Exit(1)
+		t.Fatal("test failed")
 	}
 
 	fmt.Printf("📋 Current frontend rules (%d total):\n", len(rules))
@@ -115,7 +117,7 @@ func main() {
 
 	if !ruleFound {
 		fmt.Printf("❌ Frontend rule not found for regex domain\n")
-		os.Exit(1)
+		t.Fatal("test failed")
 	}
 	fmt.Printf("✅ Frontend rule found for regex domain\n")
 
@@ -139,7 +141,7 @@ func main() {
 		req, err := http.NewRequest("GET", "http://localhost:8080/", nil)
 		if err != nil {
 			fmt.Printf("❌ Failed to create request: %v\n", err)
-			os.Exit(1)
+			t.Fatal("test failed")
 		}
 		req.Host = tc.host
 
@@ -154,39 +156,39 @@ func main() {
 		if tc.shouldMatch {
 			if err != nil {
 				fmt.Printf("❌ Expected routing to backend but got error: %v\n", err)
-				os.Exit(1)
+				t.Fatal("test failed")
 			}
-			
+
 			body, err := io.ReadAll(resp.Body)
 			if err != nil {
 				fmt.Printf("❌ Failed to read response body: %v\n", err)
-				os.Exit(1)
+				t.Fatal("test failed")
 			}
 			resp.Body.Close()
-			
+
 			fmt.Printf("DEBUG: Response status: %d, body: %s\n", resp.StatusCode, string(body))
-			
+
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				fmt.Printf("✅ Routed to backend (status: %d, body length: %d)\n", resp.StatusCode, len(body))
 			} else if resp.StatusCode == 503 {
 				fmt.Printf("❌ Backend unavailable (503) - service not properly registered\n")
-				os.Exit(1)
+				t.Fatal("test failed")
 			} else {
 				fmt.Printf("❌ Unexpected response from backend: %d, expected 200\n", resp.StatusCode)
-				os.Exit(1)
+				t.Fatal("test failed")
 			}
 		} else {
 			if err != nil {
 				fmt.Printf("❌ Request should reach default backend but got error: %v\n", err)
-				os.Exit(1)
+				t.Fatal("test failed")
 			} else {
 				body, err := io.ReadAll(resp.Body)
 				if err != nil {
 					fmt.Printf("❌ Failed to read response body: %v\n", err)
-					os.Exit(1)
+					t.Fatal("test failed")
 				}
 				resp.Body.Close()
-				
+
 				if resp.StatusCode == 404 {
 					bodyStr := string(body)
 					if bodyStr == "404 - Domain not found" {
@@ -196,7 +198,7 @@ func main() {
 					}
 				} else {
 					fmt.Printf("❌ Expected 404 from default backend, got %d\n", resp.StatusCode)
-					os.Exit(1)
+					t.Fatal("test failed")
 				}
 			}
 		}
