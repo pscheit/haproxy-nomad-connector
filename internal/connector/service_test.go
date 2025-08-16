@@ -486,8 +486,8 @@ func TestProcessServiceEventWithDomainTag_ExistingServer_ShouldStillCreateFronte
 	}
 
 	// Server already exists, so status should be "already_exists"
-	if resultMap["status"] != "already_exists" {
-		t.Errorf("Expected status 'already_exists', got %s", resultMap["status"])
+	if resultMap["status"] != StatusAlreadyExists {
+		t.Errorf("Expected status '%s', got %s", StatusAlreadyExists, resultMap["status"])
 	}
 
 	// BUT frontend rule should STILL be created!

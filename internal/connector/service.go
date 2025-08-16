@@ -24,8 +24,15 @@ const (
 	StatusCreated           = "created"
 	StatusDeleted           = "deleted"
 	StatusDraining          = "draining"
+	StatusAlreadyExists     = "already_exists"
 	MethodGracefulDrain     = "graceful_drain"
 	MethodImmediateDeletion = "immediate_deletion"
+)
+
+// Event type constants
+const (
+	EventTypeServiceRegistration   = "ServiceRegistration"
+	EventTypeServiceDeregistration = "ServiceDeregistration"
 )
 
 // ServiceEvent represents a Nomad service registration/deregistration event
@@ -162,9 +169,9 @@ func processDynamicService(
 	cfg *config.Config,
 ) (interface{}, error) {
 	switch event.Type {
-	case "ServiceRegistration":
+	case EventTypeServiceRegistration:
 		return handleServiceRegistration(ctx, client, event, cfg)
-	case "ServiceDeregistration":
+	case EventTypeServiceDeregistration:
 		return handleServiceDeregistration(ctx, client, event, cfg)
 	default:
 		return map[string]string{"status": "skipped", "reason": "unknown event type"}, nil
@@ -182,9 +189,9 @@ func processDynamicServiceWithHealthCheckAndConfig(
 	cfg *config.Config,
 ) (interface{}, error) {
 	switch event.Type {
-	case "ServiceRegistration":
+	case EventTypeServiceRegistration:
 		return handleServiceRegistrationWithHealthCheck(ctx, client, nomadClient, event, logger, cfg.HAProxy.Frontend)
-	case "ServiceDeregistration":
+	case EventTypeServiceDeregistration:
 		return handleServiceDeregistrationWithDrainTimeout(ctx, client, event, cfg, drainTimeoutSec, logger)
 	default:
 		return map[string]string{"status": "skipped", "reason": "unknown event type"}, nil
@@ -224,9 +231,9 @@ func handleServiceRegistration(
 		return nil, err
 	}
 	if serverExists {
-		result["status"] = "already_exists"
+		result["status"] = StatusAlreadyExists
 	} else {
-		result["status"] = "created"
+		result["status"] = StatusCreated
 	}
 
 	// ALWAYS reconcile frontend rules (regardless of server existence)
@@ -466,13 +473,78 @@ func removeFrontendRule(client haproxy.ClientInterface, serviceName string, tags
 
 // processCustomService adds servers to existing backends
 func processCustomService(
-	_ context.Context,
-	_ haproxy.ClientInterface,
-	_ *ServiceEvent,
-	_ *config.Config,
+	ctx context.Context,
+	client haproxy.ClientInterface,
+	event *ServiceEvent,
+	cfg *config.Config,
 ) (interface{}, error) {
-	// TODO: Implement custom backend server management with domain mapping
-	return map[string]string{"status": "todo", "reason": "custom backend not implemented"}, nil
+	switch event.Type {
+	case EventTypeServiceRegistration:
+		return handleCustomServiceRegistration(ctx, client, event, cfg)
+	case EventTypeServiceDeregistration:
+		return handleCustomServiceDeregistration(ctx, client, event, cfg)
+	default:
+		return map[string]string{"status": "skipped", "reason": "unknown event type"}, nil
+	}
+}
+
+// handleCustomServiceRegistration adds servers to existing custom backends
+func handleCustomServiceRegistration(
+	_ context.Context,
+	client haproxy.ClientInterface,
+	event *ServiceEvent,
+	cfg *config.Config,
+) (interface{}, error) {
+	backendName := sanitizeServiceName(event.Service.ServiceName)
+
+	// Ensure the custom backend exists
+	_, err := client.GetBackend(backendName)
+	if err != nil {
+		return nil, fmt.Errorf("custom backend %s does not exist: %w", backendName, err)
+	}
+
+	version, err := client.GetConfigVersion()
+	if err != nil {
+		return nil, err
+	}
+
+	serverName := generateServerName(event.Service.ServiceName, event.Service.Address, event.Service.Port)
+
+	// Initialize result map
+	result := map[string]string{
+		"backend": backendName,
+		"server":  serverName,
+	}
+
+	// Ensure server exists in the custom backend
+	serverExists, err := ensureServer(client, backendName, serverName, event.Service.Address, event.Service.Port, version)
+	if err != nil {
+		return nil, err
+	}
+	if serverExists {
+		result["status"] = StatusAlreadyExists
+	} else {
+		result["status"] = StatusCreated
+	}
+
+	// ALWAYS reconcile frontend rules (regardless of server existence)
+	err = reconcileFrontendRule(client, event.Service.ServiceName, event.Service.Tags, backendName, result, cfg.HAProxy.Frontend)
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// handleCustomServiceDeregistration removes servers from custom backends
+func handleCustomServiceDeregistration(
+	ctx context.Context,
+	client haproxy.ClientInterface,
+	event *ServiceEvent,
+	cfg *config.Config,
+) (interface{}, error) {
+	// Use the same logic as dynamic services but don't delete the backend
+	return handleServiceDeregistrationWithDrainTimeout(ctx, client, event, cfg, config.DefaultDrainTimeoutSec, nil)
 }
 
 // handleServiceRegistrationWithHealthCheck handles service registration with health check synchronization
@@ -527,7 +599,7 @@ func handleServiceRegistrationWithHealthCheck(
 		if existingServer.Name == serverName {
 			// Initialize result map for existing server
 			result := map[string]string{
-				"status":  "already_exists",
+				"status":  StatusAlreadyExists,
 				"backend": backendName,
 				"server":  serverName,
 			}

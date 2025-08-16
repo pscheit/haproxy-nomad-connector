@@ -121,11 +121,37 @@ The `haproxy.backend_strategy` setting controls conflict resolution:
 - Network operations should be retryable with exponential backoff
 - Configuration validation happens early in startup
 - Clear error messages for common operational issues
-- to make a new version and to be done the CI HAS to pass. Its not a matter of who did it, if the CI fails you fix it
-- you are done when:
-code is codestyled
-all acceptance criteria of the ADR/ticket are tested
-all tests pass
-its commited and pushed
-the CI passes green
-- before you commit, run make lint and verify that all tests are passing
+
+## ⚠️ CRITICAL: Definition of DONE
+
+**ALWAYS use the TodoWrite tool to track tasks according to these criteria. A task is only DONE when ALL criteria are met:**
+
+### Required DONE Criteria (ALL must be satisfied):
+a) **Test ALL acceptance criteria** - Every acceptance criteria from the ADR/ticket must have corresponding tests
+b) **Failing tests first** - Tests must initially fail and reproduce the exact bug/requirement  
+c) **Implement solution** - Write minimal code to make tests pass
+d) **Code quality** - Lint everything, verify solution with real-world test, ALL tests green (unit + integration)
+e) **CI validation** - Commit, push, and verify CI passes with ALL new tests executing
+f) **Production validation** - Test fix in actual production environment where issue occurred
+
+### Mandatory Process:
+1. **ALWAYS use TodoWrite tool** to explicitly track each DONE criterion (a-f) as separate todo items
+2. **NEVER mark a task as "completed" or "done"** unless ALL 6 criteria are satisfied
+3. **Before any commit** - run `make lint` and verify that ALL tests are passing (unit + integration)
+4. **CI must pass** - It's not a matter of who did it, if CI fails you must fix it
+5. **Real-world validation required** - Deploy and test in the actual environment where the issue occurred
+
+### Example TodoWrite Usage:
+```
+- Test acceptance criteria A from ADR-009
+- Test acceptance criteria B from ADR-009  
+- Implement fix for server counting logic
+- All unit tests passing
+- All integration tests passing
+- Code linted and formatted
+- Committed and pushed
+- CI pipeline green
+- Production validation complete
+```
+
+**Remember: Saying "it's done" prematurely undermines quality and creates technical debt. Follow the process.**
