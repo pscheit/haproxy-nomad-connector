@@ -12,11 +12,11 @@ import (
 // mockHAProxyClientWithReadyTracking extends the existing mock to track ReadyServer calls
 type mockHAProxyClientWithReadyTracking struct {
 	mockHAProxyClient
-	readyServerCalled     bool
-	readyServerCallCount  int
-	readyServerBackend    string
-	readyServerName       string
-	mu                    sync.Mutex
+	readyServerCalled    bool
+	readyServerCallCount int
+	readyServerBackend   string
+	readyServerName      string
+	mu                   sync.Mutex
 }
 
 func (m *mockHAProxyClientWithReadyTracking) ReadyServer(backendName, serverName string) error {
@@ -38,7 +38,7 @@ func (m *mockHAProxyClientWithReadyTracking) GetBackend(name string) (*haproxy.B
 // where servers are properly set to ready state after creation in HAProxy 2.x
 func TestHealthCheckEnabledAfterServerCreation(t *testing.T) {
 	mock := &mockHAProxyClientWithReadyTracking{}
-	
+
 	// Create a service registration event for custom backend
 	event := &ServiceEvent{
 		Type: EventTypeServiceRegistration,
@@ -51,7 +51,7 @@ func TestHealthCheckEnabledAfterServerCreation(t *testing.T) {
 	}
 
 	cfg := &config.Config{}
-	
+
 	// Process the service registration
 	_, err := ProcessServiceEvent(context.Background(), mock, event, cfg)
 	if err != nil {
@@ -62,7 +62,7 @@ func TestHealthCheckEnabledAfterServerCreation(t *testing.T) {
 	if !mock.readyServerCalled {
 		t.Errorf("REGRESSION: ReadyServer was not called after server creation - server would remain in MAINT mode in HAProxy 2.x")
 	}
-	
+
 	if mock.readyServerCallCount != 1 {
 		t.Errorf("Expected ReadyServer to be called exactly once, got %d calls", mock.readyServerCallCount)
 	}
