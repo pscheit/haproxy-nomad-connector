@@ -173,6 +173,11 @@ func processDynamicService(
 		return handleServiceRegistration(ctx, client, event, cfg)
 	case EventTypeServiceDeregistration:
 		return handleServiceDeregistration(ctx, client, event, cfg)
+	case "NodeEvent", "NodeDeregistration", "AllocationUpdated":
+		// Fix Bug #2: Handle events that can affect service availability
+		// These events may indicate a service instance is no longer available
+		// and should be treated as service deregistration
+		return handleServiceDeregistration(ctx, client, event, cfg)
 	default:
 		return map[string]string{"status": "skipped", "reason": "unknown event type"}, nil
 	}
@@ -192,6 +197,11 @@ func processDynamicServiceWithHealthCheckAndConfig(
 	case EventTypeServiceRegistration:
 		return handleServiceRegistrationWithHealthCheck(ctx, client, nomadClient, event, logger, cfg.HAProxy.Frontend)
 	case EventTypeServiceDeregistration:
+		return handleServiceDeregistrationWithDrainTimeout(ctx, client, event, cfg, drainTimeoutSec, logger)
+	case "NodeEvent", "NodeDeregistration", "AllocationUpdated":
+		// Fix Bug #2: Handle events that can affect service availability
+		// These events may indicate a service instance is no longer available
+		// and should be treated as service deregistration with drain timeout
 		return handleServiceDeregistrationWithDrainTimeout(ctx, client, event, cfg, drainTimeoutSec, logger)
 	default:
 		return map[string]string{"status": "skipped", "reason": "unknown event type"}, nil
@@ -295,6 +305,14 @@ func ensureServer(client haproxy.ClientInterface, backendName, serverName, addre
 	if err != nil {
 		return false, fmt.Errorf("failed to create server %s in backend %s: %w", serverName, backendName, err)
 	}
+
+	// Fix Bug #1: Enable health checks by setting server to ready state
+	// In HAProxy 2.x, servers start in MAINT mode even with check=enabled
+	err = client.ReadyServer(backendName, serverName)
+	if err != nil {
+		return false, fmt.Errorf("failed to set server %s to ready state in backend %s: %w", serverName, backendName, err)
+	}
+
 	return false, nil
 }
 
@@ -483,6 +501,11 @@ func processCustomService(
 		return handleCustomServiceRegistration(ctx, client, event, cfg)
 	case EventTypeServiceDeregistration:
 		return handleCustomServiceDeregistration(ctx, client, event, cfg)
+	case "NodeEvent", "NodeDeregistration", "AllocationUpdated":
+		// Fix Bug #2: Handle events that can affect service availability
+		// These events may indicate a service instance is no longer available
+		// and should be treated as service deregistration
+		return handleCustomServiceDeregistration(ctx, client, event, cfg)
 	default:
 		return map[string]string{"status": "skipped", "reason": "unknown event type"}, nil
 	}
@@ -631,6 +654,13 @@ func handleServiceRegistrationWithHealthCheck(
 	_, err = client.CreateServer(backendName, &server, version)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create server %s in backend %s: %w", serverName, backendName, err)
+	}
+
+	// Fix Bug #1: Enable health checks by setting server to ready state
+	// In HAProxy 2.x, servers start in MAINT mode even with check=enabled
+	err = client.ReadyServer(backendName, serverName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to set server %s to ready state in backend %s: %w", serverName, backendName, err)
 	}
 
 	// Initialize result map
