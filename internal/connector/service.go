@@ -33,6 +33,9 @@ const (
 const (
 	EventTypeServiceRegistration   = "ServiceRegistration"
 	EventTypeServiceDeregistration = "ServiceDeregistration"
+	EventTypeNodeEvent             = "NodeEvent"
+	EventTypeNodeDeregistration    = "NodeDeregistration"
+	EventTypeAllocationUpdated     = "AllocationUpdated"
 )
 
 // ServiceEvent represents a Nomad service registration/deregistration event
@@ -173,7 +176,7 @@ func processDynamicService(
 		return handleServiceRegistration(ctx, client, event, cfg)
 	case EventTypeServiceDeregistration:
 		return handleServiceDeregistration(ctx, client, event, cfg)
-	case "NodeEvent", "NodeDeregistration", "AllocationUpdated":
+	case EventTypeNodeEvent, EventTypeNodeDeregistration, EventTypeAllocationUpdated:
 		// Fix Bug #2: Handle events that can affect service availability
 		// These events may indicate a service instance is no longer available
 		// and should be treated as service deregistration
@@ -198,7 +201,7 @@ func processDynamicServiceWithHealthCheckAndConfig(
 		return handleServiceRegistrationWithHealthCheck(ctx, client, nomadClient, event, logger, cfg.HAProxy.Frontend)
 	case EventTypeServiceDeregistration:
 		return handleServiceDeregistrationWithDrainTimeout(ctx, client, event, cfg, drainTimeoutSec, logger)
-	case "NodeEvent", "NodeDeregistration", "AllocationUpdated":
+	case EventTypeNodeEvent, EventTypeNodeDeregistration, EventTypeAllocationUpdated:
 		// Fix Bug #2: Handle events that can affect service availability
 		// These events may indicate a service instance is no longer available
 		// and should be treated as service deregistration with drain timeout
@@ -501,7 +504,7 @@ func processCustomService(
 		return handleCustomServiceRegistration(ctx, client, event, cfg)
 	case EventTypeServiceDeregistration:
 		return handleCustomServiceDeregistration(ctx, client, event, cfg)
-	case "NodeEvent", "NodeDeregistration", "AllocationUpdated":
+	case EventTypeNodeEvent, EventTypeNodeDeregistration, EventTypeAllocationUpdated:
 		// Fix Bug #2: Handle events that can affect service availability
 		// These events may indicate a service instance is no longer available
 		// and should be treated as service deregistration
@@ -571,6 +574,8 @@ func handleCustomServiceDeregistration(
 }
 
 // handleServiceRegistrationWithHealthCheck handles service registration with health check synchronization
+//
+//nolint:gocyclo // Pre-existing complexity, refactoring would require significant changes
 func handleServiceRegistrationWithHealthCheck(
 	_ context.Context,
 	client haproxy.ClientInterface,
