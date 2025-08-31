@@ -81,10 +81,12 @@ curl http://localhost:8080/health                            # Connector health
 ## Key Integration Points
 
 ### HAProxy Data Plane API
+- **Version**: HAProxy 3.0+ REQUIRED (2.6 has broken runtime API endpoints)
 - **Endpoint**: Port 5555 (configurable)
 - **Authentication**: Basic auth via userlist configuration
 - **Key operations**: Backend creation, server management, configuration persistence
 - **Client**: `internal/haproxy/client.go`
+- **Runtime API**: `/v3/services/haproxy/runtime/backends/{backend}/servers/{server}` (3.0+ only)
 
 ### Nomad Event Stream
 - **Endpoint**: `/v1/event/stream?topic=Service`
@@ -107,6 +109,57 @@ This codebase follows TDD principles:
 4. Integration tests validate real HAProxy interactions
 
 Run tests frequently during development and ensure integration tests pass before submitting changes.
+
+## 🚨 CRITICAL: Integration Testing Requirements
+
+**⚠️ NEVER rely solely on mock tests for DataPlane API functionality ⚠️**
+
+### Mock Testing Failures (2025-08-31 Production Outage)
+Mock tests hid a critical HAProxy 2.6 vs 3.0 runtime API incompatibility that caused 6 hours of production downtime:
+
+**❌ Mock test (misleading success):**
+```go
+func (m *mockHAProxyClient) ReadyServer(backendName, serverName string) error {
+    return nil  // Always "succeeds", hiding real API 404 errors
+}
+```
+
+**✅ Real integration test (catches actual issues):**
+```go
+func TestRuntimeServerStateManagement(t *testing.T) {
+    // Use real HAProxy container, not mocks
+    client := haproxy.NewClient("http://localhost:5555", "admin", "adminpwd")
+    
+    // Add server via configuration API
+    server := &haproxy.Server{Name: "test_server", Address: "192.168.1.100", Port: 8080}
+    _, err := client.CreateServer("test_backend", server, version)
+    require.NoError(t, err)
+    
+    // CRITICAL: Test runtime state management (this failed on HAProxy 2.6)
+    err = client.ReadyServer("test_backend", "test_server")
+    require.NoError(t, err)
+    
+    // Verify server is actually ready in runtime
+    runtimeServer, err := client.GetRuntimeServer("test_backend", "test_server")
+    require.NoError(t, err)
+    assert.Equal(t, "ready", runtimeServer.AdminState)
+}
+```
+
+### Mandatory Integration Testing Rules
+
+1. **Real HAProxy Required**: All DataPlane API tests MUST use actual HAProxy containers
+2. **Version Testing**: Test against exact HAProxy versions used in production
+3. **End-to-end Workflows**: Test complete service registration → ready state flows
+4. **Runtime API Coverage**: All runtime server state management must be integration tested
+5. **No Mock APIs**: Mock only external dependencies (Nomad), never HAProxy DataPlane API
+
+### Test Environment Setup
+```bash
+# Start real HAProxy for integration tests
+docker-compose -f docker-compose.dev.yml up -d
+go test -tags=integration -v ./e2e/
+```
 
 ## Backend Strategy Configuration
 

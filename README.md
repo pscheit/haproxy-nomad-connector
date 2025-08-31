@@ -85,13 +85,33 @@ use the makefile to run tests, linter and build.
 
 ## 📋 Requirements
 
-- **HAProxy 2.0+** with Data Plane API
+- **HAProxy 3.0+** with Data Plane API (runtime server management requires 3.0+)
 - **Nomad cluster** with service discovery
 - **Go 1.21+** for building
 
+⚠️  **HAProxy 2.x is NOT supported** due to incomplete DataPlane API runtime endpoints. See [ADR-010](docs/adrs/ADR-010-haproxy-3-0-runtime-api-requirement.md) for details.
+
 ## 🚀 Installation
 
-### Binary
+### HAProxy 3.0 Setup (Required)
+
+**Debian/Ubuntu:**
+```bash
+# Add HAProxy 3.0 repository
+curl -s https://haproxy.debian.net/bernat.debian.org.gpg | apt-key add -
+echo "deb https://haproxy.debian.net bookworm-backports-3.0 main" > /etc/apt/sources.list.d/haproxy.list
+apt update
+
+# Install HAProxy 3.0
+apt install haproxy=3.0.*
+```
+
+**Verify version:**
+```bash
+haproxy -v  # Should show HAProxy version 3.0.x
+```
+
+### Connector Binary
 ```bash
 go install github.com/pscheit/haproxy-nomad-connector/cmd/haproxy-nomad-connector@latest
 ```
