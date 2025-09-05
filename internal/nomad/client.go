@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	nomadapi "github.com/hashicorp/nomad/api"
@@ -159,10 +161,9 @@ func (c *Client) streamEvents(ctx context.Context, eventChan chan<- ServiceEvent
 			}
 
 			if err := decoder.Decode(&eventWrapper); err != nil {
-				if err == io.EOF {
-					return fmt.Errorf("event stream ended")
+				if shouldReconnect, reconnectErr := c.handleStreamError(err); shouldReconnect {
+					return reconnectErr
 				}
-				c.logger.Printf("Failed to decode event: %v", err)
 				continue
 			}
 
@@ -180,6 +181,36 @@ func (c *Client) streamEvents(ctx context.Context, eventChan chan<- ServiceEvent
 			}
 		}
 	}
+}
+
+// handleStreamError determines if a streaming error should trigger reconnection
+func (c *Client) handleStreamError(err error) (shouldReconnect bool, reconnectErr error) {
+	c.logger.Printf("DEBUG: handleStreamError called with error: %T: %v", err, err)
+
+	if err == io.EOF {
+		c.logger.Printf("DEBUG: EOF detected, triggering reconnection")
+		return true, fmt.Errorf("event stream ended")
+	}
+
+	// Connection errors (like timeouts) should trigger reconnection
+	if netErr, ok := err.(*net.OpError); ok {
+		c.logger.Printf("DEBUG: Network error detected, triggering reconnection")
+		return true, fmt.Errorf("network error during event stream: %w", netErr)
+	}
+
+	// For connection issues, return error to trigger reconnection
+	errStr := err.Error()
+	if strings.Contains(errStr, "connection timed out") ||
+		strings.Contains(errStr, "connection reset") ||
+		strings.Contains(errStr, "broken pipe") ||
+		strings.Contains(errStr, "unexpected EOF") {
+		c.logger.Printf("DEBUG: Connection issue detected (%s), triggering reconnection", errStr)
+		return true, fmt.Errorf("connection lost: %w", err)
+	}
+
+	c.logger.Printf("Failed to decode event: %v", err)
+	c.logger.Printf("DEBUG: Not triggering reconnection for this error type")
+	return false, nil
 }
 
 // GetServices gets all registered services (for initial sync)
