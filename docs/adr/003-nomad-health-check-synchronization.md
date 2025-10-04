@@ -1,24 +1,26 @@
 # ADR-003: Synchronize Health Checks from Nomad Job Specifications
 
 ## Status
-Proposed
+Implemented (2025-10-04)
+
+**Modified from original proposal** - See "Actual Implementation" section below for details.
 
 ## Context
 
-Currently, the haproxy-nomad-connector creates all HAProxy backend servers with basic Layer4 health checks (`check enabled`), regardless of the actual health check configuration defined in Nomad job specifications. This creates several issues:
+The haproxy-nomad-connector needed to support proper health check configuration from Nomad services. Initial implementation used basic TCP checks for all servers, which created several issues:
 
-1. **Inconsistency**: Health checks in HAProxy don't match those defined in Nomad, leading to different failure detection behavior
-2. **Suboptimal checks**: Services with HTTP endpoints use TCP checks instead of HTTP, missing application-level failures
-3. **Manual configuration**: Operators must use tags (`haproxy.check.*`) to configure health checks, duplicating what's already in Nomad
-4. **Rolling deployment issues**: Mismatched health checks cause unnecessary downtime during deployments
+1. **Inconsistency**: Health checks in HAProxy didn't match those defined in Nomad, leading to different failure detection behavior
+2. **Suboptimal checks**: Services with HTTP endpoints used TCP checks instead of HTTP, missing application-level failures
+3. **Manual configuration**: Operators had to manually configure health checks
+4. **Rolling deployment issues**: Mismatched health checks caused unnecessary downtime during deployments
 
-Nomad job specifications already contain comprehensive health check definitions:
+Nomad job specifications contain comprehensive health check definitions:
 
 ```hcl
 service {
   name = "web-app"
   port = "http"
-  
+
   check {
     type     = "http"
     path     = "/health"
@@ -28,93 +30,145 @@ service {
 }
 ```
 
-## Decision
+## Original Decision (Proposed)
 
-We will enhance the connector to automatically read and apply health check configurations from Nomad job specifications to HAProxy backend servers.
+Initially proposed to query Nomad job specifications and apply health checks using per-server configuration fields. However, during implementation we discovered critical limitations with the HAProxy DataPlane API that required a different approach.
 
-### Implementation Approach
+## Actual Implementation
 
-1. **Query Job Specification**: When processing a ServiceRegistration event, query the Nomad API for the job specification
-2. **Extract Check Configuration**: Parse the service's check stanza from the job spec
-3. **Map to HAProxy Configuration**: Convert Nomad check types to HAProxy equivalents:
-   - Nomad `http` → HAProxy `httpchk`
-   - Nomad `tcp` → HAProxy `check` (default)
-   - Nomad `script` → Skip or use TCP fallback
-   - Nomad `grpc` → HAProxy `check` with custom options
+### Critical Discovery: HAProxy DataPlane API Limitations
 
-4. **Apply Configuration**: Configure the HAProxy server with appropriate health check parameters
-
-### API Changes
-
-The `haproxy.Server` struct will be extended:
+During implementation, we discovered that **per-server health check fields are silently ignored** by the HAProxy DataPlane API v3:
 
 ```go
+// These fields DO NOT WORK when set on individual servers:
 type Server struct {
-    Name        string
-    Address     string
-    Port        int
-    Check       string
-    CheckType   string  // "tcp", "http", "ssl", "mysql", etc.
-    CheckPath   string  // For HTTP checks
-    CheckMethod string  // GET, HEAD, etc.
-    CheckHost   string  // Host header for HTTP checks
-    CheckInter  int     // Interval in milliseconds
-    CheckRise   int     // Consecutive successes to mark UP
-    CheckFall   int     // Consecutive failures to mark DOWN
+    CheckType   string  // ❌ Ignored by DataPlane API
+    CheckPath   string  // ❌ Ignored by DataPlane API
+    CheckMethod string  // ❌ Ignored by DataPlane API
+    CheckHost   string  // ❌ Ignored by DataPlane API
 }
 ```
 
-### Fallback Behavior
+Testing revealed that setting these fields had no effect on HAProxy's actual health check behavior. The API accepts them but doesn't apply them to the configuration.
 
-1. If job spec query fails → Use current behavior (basic TCP check)
-2. If no check defined in Nomad → Use basic TCP check
-3. If check type unsupported → Log warning and use TCP check
-4. Tags override job spec → `haproxy.check.*` tags take precedence
+### Actual Approach: Backend-Level Configuration
+
+Health checks **must be configured at the backend level**, not per-server:
+
+```go
+type Backend struct {
+    Name            string
+    AdvCheck        string           // "httpchk" for HTTP checks
+    HTTPCheckParams *HTTPCheckParams // HTTP check configuration
+    DefaultServer   *Server          // Default server parameters including check enablement
+}
+
+type HTTPCheckParams struct {
+    Method  string  // "GET", "POST", etc.
+    URI     string  // Health check path
+    Host    string  // Host header
+}
+```
+
+### Implementation Details
+
+1. **Tag-Based Configuration**: Services specify health checks via tags instead of querying job specs:
+   ```hcl
+   tags = [
+     "haproxy.enable=true",
+     "haproxy.check.path=/health",
+     "haproxy.check.host=example.com",
+     "haproxy.check.method=GET"
+   ]
+   ```
+
+2. **Backend Creation**: When creating backends, configure health checks at backend level:
+   ```go
+   backend := haproxy.Backend{
+       AdvCheck: "httpchk",
+       HTTPCheckParams: &haproxy.HTTPCheckParams{
+           Method: "GET",
+           URI:    "/health",
+           Host:   "example.com",
+       },
+       DefaultServer: &haproxy.Server{
+           Check: "enabled",  // Critical: enables checks for all servers
+       },
+   }
+   ```
+
+3. **The `default_server` Solution**: Setting `DefaultServer.Check = "enabled"` at the backend level enables health checks automatically for all servers added to that backend. This eliminates the need for:
+   - Socket commands (`enable health backend/server`)
+   - Runtime API calls to set server state
+   - Per-server check configuration
+
+4. **Health Check Types**:
+   - HTTP checks: `backend.AdvCheck = "httpchk"` with `HTTPCheckParams`
+   - TCP checks: `default_server.check = "enabled"` only (no AdvCheck)
+   - Disabled: `haproxy.check.disabled=true` tag
+
+### Why Not Job Spec Queries?
+
+We opted for tag-based configuration instead of querying Nomad job specs because:
+
+1. **Simplicity**: Tags are immediately available in service events
+2. **Performance**: No additional API calls required
+3. **Flexibility**: Tags can override or supplement Nomad checks
+4. **Backward compatibility**: Existing tag-based configuration continues to work
 
 ## Consequences
 
 ### Positive
 
-- **Consistency**: HAProxy health checks match Nomad's configuration
-- **Zero-downtime deployments**: Proper health checks reduce rolling deployment issues
-- **Less configuration**: No need to duplicate health check config in tags
-- **Better failure detection**: HTTP checks catch application-level failures
-- **Single source of truth**: Nomad job spec becomes authoritative for health checks
+- ✅ **Zero-downtime deployments**: Proper health checks enable smooth rolling deployments
+- ✅ **Better failure detection**: HTTP checks catch application-level failures
+- ✅ **Automatic enablement**: `default_server` approach works reliably in HAProxy 3.0+
+- ✅ **Simple configuration**: Tag-based configuration is intuitive
+- ✅ **No socket commands**: Pure HTTP API approach eliminates complexity
 
 ### Negative
 
-- **Additional API calls**: Each service registration requires querying job specs
-- **Increased complexity**: More code paths and error scenarios
-- **Potential latency**: Job spec queries add processing time
-- **Backward compatibility**: Must maintain support for existing tag-based configuration
+- ⚠️ **Backend-level limitation**: All servers in a backend share the same health check configuration
+- ⚠️ **Tag duplication**: Health check configuration must be specified in tags if different from Nomad
+- ⚠️ **No per-server customization**: Cannot have different health check paths for different servers in same backend
 
-### Mitigation Strategies
+### Trade-offs Accepted
 
-1. **Cache job specs**: Cache recently queried job specifications with TTL
-2. **Async processing**: Query job specs asynchronously to avoid blocking
-3. **Feature flag**: Add config option to enable/disable job spec synchronization
-4. **Graceful degradation**: Always fall back to basic checks on errors
+We accepted backend-level health check configuration as a reasonable constraint because:
+- Services in the same backend typically use the same health check endpoint
+- The alternative (per-server configuration) doesn't work in HAProxy DataPlane API
+- Tag-based configuration provides sufficient flexibility for most use cases
 
-## Implementation Plan
+## Implementation Results
 
-### Phase 1: Core Implementation
-- Add Nomad job query client methods
-- Implement check stanza parser
-- Create HAProxy check configuration mapper
-- Update server creation logic
+### What Works
 
-### Phase 2: Optimization
-- Add job spec caching layer
-- Implement async job spec fetching
-- Add metrics for monitoring
+✅ **E2E Test Verification** (`e2e/connector_healthcheck_e2e_test.go`):
+1. Backend created with HTTP health check configuration
+2. HAProxy config contains `option httpchk GET /health example.com`
+3. Server added with checks enabled via `default_server`
+4. Health checks actually run and report status
 
-### Phase 3: Advanced Features
-- Support for gRPC health checks
-- Custom check scripts via sidecar pattern
-- Multi-port service health checks
+✅ **Regression Test** (`health_check_enable_bug_test.go`):
+- Verifies backends are created with `default_server.check=enabled`
+- Prevents regression to MAINT mode issues
+
+### Performance
+
+- No additional API calls required (tags available in events)
+- Single backend creation includes full health check configuration
+- No socket commands or Runtime API calls needed
+
+## Related ADRs
+
+- **ADR-010**: HAProxy 3.0+ Runtime API Requirement - Documents why HAProxy 3.0+ is needed for reliable runtime operations
+- **ADR-006**: Rolling Deployments - Health checks enable zero-downtime deployments
 
 ## References
 
 - [Nomad Service Checks Documentation](https://developer.hashicorp.com/nomad/docs/job-specification/check)
-- [HAProxy Health Checks Documentation](http://cbonte.github.io/haproxy-dconv/2.6/configuration.html#5.2-check)
-- [Issue #X: Services fail during rolling deployments]
+- [HAProxy Health Checks Documentation](http://cbonte.github.io/haproxy-dconv/3.0/configuration.html#5.2-check)
+- [HAProxy DataPlane API v3 Specification](https://www.haproxy.com/documentation/dataplaneapi/latest/)
+- E2E Test: `e2e/connector_healthcheck_e2e_test.go`
+- Implementation: `internal/connector/service.go` (ensureBackend, parseHealthCheckFromTags)
