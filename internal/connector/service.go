@@ -595,7 +595,7 @@ func handleCustomServiceDeregistration(
 
 // handleServiceRegistrationWithHealthCheck handles service registration with health check synchronization
 //
-//nolint:gocyclo // Pre-existing complexity, refactoring would require significant changes
+//nolint:gocyclo,funlen // Pre-existing complexity and length, refactoring would require significant changes
 func handleServiceRegistrationWithHealthCheck(
 	_ context.Context,
 	client haproxy.ClientInterface,

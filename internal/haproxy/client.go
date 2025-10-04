@@ -90,6 +90,8 @@ func (c *Client) GetBackend(name string) (*Backend, error) {
 }
 
 // CreateBackend creates a new backend
+//
+//nolint:gocritic // Backend struct matches API interface requirements
 func (c *Client) CreateBackend(backend Backend, version int) (*Backend, error) {
 	var created Backend
 	err := c.makeRequest(HTTPMethodPOST, "/v3/services/haproxy/configuration/backends", backend, &created, version)

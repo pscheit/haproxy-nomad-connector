@@ -44,6 +44,7 @@ func (m *MockHAProxyClient) GetBackend(name string) (*haproxy.Backend, error) {
 	return backend, nil
 }
 
+//nolint:gocritic // Matches interface signature
 func (m *MockHAProxyClient) CreateBackend(backend haproxy.Backend, version int) (*haproxy.Backend, error) {
 	m.backends[backend.Name] = &backend
 	m.version++

@@ -47,6 +47,7 @@ func (m *mockHAProxyClientWithBackendTracking) GetBackend(name string) (*haproxy
 	return nil, &haproxy.APIError{StatusCode: 404}
 }
 
+//nolint:gocritic // Matches interface signature
 func (m *mockHAProxyClientWithBackendTracking) CreateBackend(backend haproxy.Backend, version int) (*haproxy.Backend, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

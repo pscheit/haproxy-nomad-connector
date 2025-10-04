@@ -148,6 +148,7 @@ func (m *mockHAProxyClient) GetBackend(name string) (*haproxy.Backend, error) {
 	return nil, &haproxy.APIError{StatusCode: 404}
 }
 
+//nolint:gocritic // Matches interface signature
 func (m *mockHAProxyClient) CreateBackend(backend haproxy.Backend, version int) (*haproxy.Backend, error) {
 	return &backend, nil
 }
