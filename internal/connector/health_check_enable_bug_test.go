@@ -34,19 +34,40 @@ func (m *mockHAProxyClientWithReadyTracking) GetBackend(name string) (*haproxy.B
 	return &haproxy.Backend{Name: name}, nil
 }
 
-// TestHealthCheckEnabledAfterServerCreation verifies the fix for Bug #1
-// where servers are properly set to ready state after creation in HAProxy 2.x
-func TestHealthCheckEnabledAfterServerCreation(t *testing.T) {
-	mock := &mockHAProxyClientWithReadyTracking{}
+// mockHAProxyClientWithBackendTracking extends the existing mock to track backend creation
+type mockHAProxyClientWithBackendTracking struct {
+	mockHAProxyClient
+	backendCreated bool
+	createdBackend haproxy.Backend
+	mu             sync.Mutex
+}
 
-	// Create a service registration event for custom backend
+func (m *mockHAProxyClientWithBackendTracking) GetBackend(name string) (*haproxy.Backend, error) {
+	// Return 404 to force backend creation
+	return nil, &haproxy.APIError{StatusCode: 404}
+}
+
+func (m *mockHAProxyClientWithBackendTracking) CreateBackend(backend haproxy.Backend, version int) (*haproxy.Backend, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.backendCreated = true
+	m.createdBackend = backend
+	return &backend, nil
+}
+
+// TestHealthCheckEnabledAfterServerCreation verifies the fix for Bug #1
+// where servers are properly configured with health checks via default_server in HAProxy 3.0
+func TestHealthCheckEnabledAfterServerCreation(t *testing.T) {
+	mock := &mockHAProxyClientWithBackendTracking{}
+
+	// Create a service registration event for dynamic backend (auto-created)
 	event := &ServiceEvent{
 		Type: EventTypeServiceRegistration,
 		Service: Service{
 			ServiceName: "test-service",
 			Address:     "192.168.1.10",
 			Port:        8080,
-			Tags:        []string{"haproxy.enable=true", "haproxy.backend=custom"},
+			Tags:        []string{"haproxy.enable=true", "haproxy.backend=dynamic"},
 		},
 	}
 
@@ -58,12 +79,16 @@ func TestHealthCheckEnabledAfterServerCreation(t *testing.T) {
 		t.Fatalf("ProcessServiceEvent failed: %v", err)
 	}
 
-	// FIXED: ReadyServer should now be called after server creation
-	if !mock.readyServerCalled {
-		t.Errorf("REGRESSION: ReadyServer was not called after server creation - server would remain in MAINT mode in HAProxy 2.x")
+	// FIXED: Backend should be created with default_server.check=enabled
+	// This ensures health checks work automatically without needing ReadyServer() calls
+	if !mock.backendCreated {
+		t.Fatalf("Backend was not created")
 	}
 
-	if mock.readyServerCallCount != 1 {
-		t.Errorf("Expected ReadyServer to be called exactly once, got %d calls", mock.readyServerCallCount)
+	if mock.createdBackend.DefaultServer == nil {
+		t.Errorf("REGRESSION: Backend created without default_server - health checks won't work")
+	} else if mock.createdBackend.DefaultServer.Check != "enabled" {
+		t.Errorf("REGRESSION: Backend default_server.check is not 'enabled' (got: %s) - servers would remain in MAINT mode",
+			mock.createdBackend.DefaultServer.Check)
 	}
 }

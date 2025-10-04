@@ -92,7 +92,7 @@ func (m *MockHAProxyClient) GetRuntimeServer(backendName, serverName string) (*h
 	}, nil
 }
 
-func (m *MockHAProxyClient) SetServerState(backendName, serverName, adminState string) error {
+func (m *MockHAProxyClient) SetServerState(ctx context.Context, backendName, serverName, adminState string) error {
 	// For mock, just return success
 	return nil
 }

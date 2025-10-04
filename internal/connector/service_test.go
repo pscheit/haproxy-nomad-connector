@@ -171,7 +171,7 @@ func (m *mockHAProxyClient) GetRuntimeServer(backendName, serverName string) (*h
 	return &haproxy.RuntimeServer{}, nil
 }
 
-func (m *mockHAProxyClient) SetServerState(backendName, serverName, adminState string) error {
+func (m *mockHAProxyClient) SetServerState(ctx context.Context, backendName, serverName, adminState string) error {
 	return nil
 }
 

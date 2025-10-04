@@ -1,5 +1,5 @@
-# _md5hash=3aa974628a982bfe5dc23afef99016c3
-# _version=205
+# _md5hash=66572bfca7ce5629b4cd229671f8ed87
+# _version=275
 # Dataplaneapi managed File
 # changing file directly can cause a conflict if dataplaneapi is running
 
@@ -36,21 +36,39 @@ frontend stats from unnamed_defaults_1
   stats uri /stats
   stats refresh 10s
 
-backend crm_prod
+backend crm_prod from unnamed_defaults_1
   balance roundrobin
   server crm_prod_192_168_1_50_8080 192.168.1.50:8080 check
 
-backend dynamic_backend from unnamed_defaults_1
+backend curl_test_backend
   balance roundrobin
-  server server1 127.0.0.1:9999 check
+  option httpchk GET /healthz curl-test.local
+  server curl_test_server test-backend:80 check
+
+backend defaultserver_backend
+  balance roundrobin
+  option httpchk GET /health default.local
+  default-server check
+  server auto_check_server test-backend:80
 
 # Error backend that returns 404 for unmatched domains
 backend error_404 from unnamed_defaults_1
   http-request return status 404 content-type "text/plain" string "404 - Domain not found"
 
-backend existing_service_prod
+backend existing_service_prod from unnamed_defaults_1
   balance roundrobin
   server existing_service_prod_192_168_1_60_8080 192.168.1.60:8080 check
+
+backend fresh_backend
+  balance roundrobin
+  option httpchk GET /health fresh.local
+  server fresh_server test-backend:80 check
+
+backend httpcheck_backend
+  balance roundrobin
+  option httpchk
+  http-check send meth GET uri /healthcheck hdr Host httpcheck.local
+  server httpcheck_server test-backend:80 check
 
 backend ps_webforge from unnamed_defaults_1
   balance roundrobin
@@ -71,14 +89,25 @@ backend test_backend_service from unnamed_defaults_1
   server test_backend_service_127_0_0_1_3001 127.0.0.1:3001 check
   server test_backend_service_test-backend_80 test-backend:80 check
 
+backend test_http_backend from unnamed_defaults_1
+  balance roundrobin
+  option httpchk
+  http-check send meth GET uri /health hdr Host test.local
+  server test_server test-backend:80 check
+
 backend test_regex_service from unnamed_defaults_1
   balance roundrobin
   server test_regex_service_192_168_1_201_8080 192.168.1.201:8080 check
 
-backend test_service_prod
+backend test_service_prod from unnamed_defaults_1
   balance roundrobin
   server test_service_prod_192_168_1_200_8080 192.168.1.200:8080 check
   server test_service_prod_192_168_1_100_8080 192.168.1.100:8080 check
+
+backend test_with_httpchk_params from unnamed_defaults_1
+  balance roundrobin
+  option httpchk GET /health test.local
+  server test_server2 test-backend:80 check
 
 # Data Plane API program
 program api

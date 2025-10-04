@@ -1,5 +1,7 @@
 package haproxy
 
+import "context"
+
 // Data Plane API response structures
 type APIInfo struct {
 	API    APIVersion `json:"api"`
@@ -12,9 +14,19 @@ type APIVersion struct {
 }
 
 type Backend struct {
-	Name    string  `json:"name"`
-	Balance Balance `json:"balance"`
-	From    string  `json:"from,omitempty"`
+	Name            string           `json:"name"`
+	Balance         Balance          `json:"balance"`
+	From            string           `json:"from,omitempty"`
+	AdvCheck        string           `json:"adv_check,omitempty"`      // "httpchk", "ldap-check", "mysql-check", etc.
+	HTTPCheckParams *HTTPCheckParams `json:"httpchk_params,omitempty"` // HTTP check parameters
+	DefaultServer   *Server          `json:"default_server,omitempty"` // Default server parameters
+}
+
+type HTTPCheckParams struct {
+	Method  string `json:"method,omitempty"`  // GET, POST, HEAD, etc.
+	URI     string `json:"uri,omitempty"`     // Health check URI
+	Host    string `json:"host,omitempty"`    // Host header
+	Version string `json:"version,omitempty"` // HTTP version (e.g. "HTTP/1.1")
 }
 
 type Balance struct {
@@ -128,7 +140,7 @@ type ClientInterface interface {
 
 	// Runtime server management
 	GetRuntimeServer(backendName, serverName string) (*RuntimeServer, error)
-	SetServerState(backendName, serverName, adminState string) error
+	SetServerState(ctx context.Context, backendName, serverName, adminState string) error
 	DrainServer(backendName, serverName string) error
 	ReadyServer(backendName, serverName string) error
 	MaintainServer(backendName, serverName string) error

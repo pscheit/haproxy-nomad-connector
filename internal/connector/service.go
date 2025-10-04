@@ -17,6 +17,7 @@ const (
 	CheckTypeHTTP     = "http"
 	CheckTypeTCP      = "tcp"
 	CheckTypeDisabled = "disabled"
+	HTTPMethodGET     = "GET"
 )
 
 // Status constants
@@ -225,7 +226,7 @@ func handleServiceRegistration(
 	backendName := sanitizeServiceName(event.Service.ServiceName)
 
 	// Ensure backend exists and is compatible
-	version, err = ensureBackend(client, backendName, version)
+	version, err = ensureBackend(client, backendName, version, event.Service.Tags)
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +260,7 @@ func handleServiceRegistration(
 }
 
 // ensureBackend ensures the backend exists and is compatible
-func ensureBackend(client haproxy.ClientInterface, backendName string, version int) (int, error) {
+func ensureBackend(client haproxy.ClientInterface, backendName string, version int, tags []string) (int, error) {
 	existingBackend, err := client.GetBackend(backendName)
 	if err == nil {
 		if !haproxy.IsBackendCompatibleForDynamicService(existingBackend) {
@@ -274,6 +275,29 @@ func ensureBackend(client haproxy.ClientInterface, backendName string, version i
 		Balance: haproxy.Balance{
 			Algorithm: "roundrobin",
 		},
+		// Always set default_server with check enabled - this ensures health checks work
+		// automatically for all servers (TCP by default, HTTP if configured below)
+		DefaultServer: &haproxy.Server{
+			Check: "enabled",
+		},
+	}
+
+	// Extract health check configuration from tags
+	healthCheckConfig := parseHealthCheckFromTags(tags)
+
+	// Configure HTTP health checks at backend level if specified
+	if healthCheckConfig != nil && healthCheckConfig.Type == CheckTypeHTTP && healthCheckConfig.Path != "" {
+		backend.AdvCheck = "httpchk"
+		backend.HTTPCheckParams = &haproxy.HTTPCheckParams{
+			Method: healthCheckConfig.Method,
+			URI:    healthCheckConfig.Path,
+			Host:   healthCheckConfig.Host,
+		}
+
+		// Default to GET if no method specified
+		if backend.HTTPCheckParams.Method == "" {
+			backend.HTTPCheckParams.Method = HTTPMethodGET
+		}
 	}
 
 	_, err = client.CreateBackend(backend, version)
@@ -309,12 +333,8 @@ func ensureServer(client haproxy.ClientInterface, backendName, serverName, addre
 		return false, fmt.Errorf("failed to create server %s in backend %s: %w", serverName, backendName, err)
 	}
 
-	// Fix Bug #1: Enable health checks by setting server to ready state
-	// In HAProxy 2.x, servers start in MAINT mode even with check=enabled
-	err = client.ReadyServer(backendName, serverName)
-	if err != nil {
-		return false, fmt.Errorf("failed to set server %s to ready state in backend %s: %w", serverName, backendName, err)
-	}
+	// Note: Health checks are enabled automatically when backend has default_server.check=enabled
+	// No socket commands or Runtime API calls needed in HAProxy 3.0
 
 	return false, nil
 }
@@ -591,6 +611,9 @@ func handleServiceRegistrationWithHealthCheck(
 
 	backendName := sanitizeServiceName(event.Service.ServiceName)
 
+	// Extract health check configuration from tags BEFORE creating backend
+	healthCheckConfig := parseHealthCheckFromTags(event.Service.Tags)
+
 	existingBackend, err := client.GetBackend(backendName)
 	if err == nil {
 		if !haproxy.IsBackendCompatibleForDynamicService(existingBackend) {
@@ -603,6 +626,26 @@ func handleServiceRegistrationWithHealthCheck(
 			Balance: haproxy.Balance{
 				Algorithm: "roundrobin",
 			},
+			// Always set default_server with check enabled - this ensures health checks work
+			// automatically for all servers (TCP by default, HTTP if configured below)
+			DefaultServer: &haproxy.Server{
+				Check: "enabled",
+			},
+		}
+
+		// Configure HTTP health checks at backend level if specified
+		if healthCheckConfig != nil && healthCheckConfig.Type == CheckTypeHTTP && healthCheckConfig.Path != "" {
+			backend.AdvCheck = "httpchk"
+			backend.HTTPCheckParams = &haproxy.HTTPCheckParams{
+				Method: healthCheckConfig.Method,
+				URI:    healthCheckConfig.Path,
+				Host:   healthCheckConfig.Host,
+			}
+
+			// Default to GET if no method specified
+			if backend.HTTPCheckParams.Method == "" {
+				backend.HTTPCheckParams.Method = HTTPMethodGET
+			}
 		}
 
 		_, err = client.CreateBackend(backend, version)
@@ -661,12 +704,8 @@ func handleServiceRegistrationWithHealthCheck(
 		return nil, fmt.Errorf("failed to create server %s in backend %s: %w", serverName, backendName, err)
 	}
 
-	// Fix Bug #1: Enable health checks by setting server to ready state
-	// In HAProxy 2.x, servers start in MAINT mode even with check=enabled
-	err = client.ReadyServer(backendName, serverName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to set server %s to ready state in backend %s: %w", serverName, backendName, err)
-	}
+	// Note: Health checks are enabled automatically when backend has default_server.check=enabled
+	// No socket commands or Runtime API calls needed in HAProxy 3.0
 
 	// Initialize result map
 	result := map[string]string{
@@ -785,7 +824,7 @@ func convertNomadToHAProxyCheck(nomadCheck *nomad.ServiceCheck) *HealthCheckConf
 	case "http", "https":
 		healthConfig.Type = CheckTypeHTTP
 		if healthConfig.Method == "" {
-			healthConfig.Method = "GET"
+			healthConfig.Method = HTTPMethodGET
 		}
 	case "tcp":
 		healthConfig.Type = CheckTypeTCP

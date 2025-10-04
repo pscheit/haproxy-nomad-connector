@@ -125,7 +125,7 @@ func (c *Client) GetRuntimeServer(backendName, serverName string) (*RuntimeServe
 }
 
 // SetServerState sets the administrative state of a server (ready, drain, maint)
-func (c *Client) SetServerState(backendName, serverName, adminState string) error {
+func (c *Client) SetServerState(ctx context.Context, backendName, serverName, adminState string) error {
 	path := fmt.Sprintf("/v3/services/haproxy/runtime/backends/%s/servers/%s", backendName, serverName)
 
 	// Create the runtime server object with the new admin state
@@ -138,17 +138,17 @@ func (c *Client) SetServerState(backendName, serverName, adminState string) erro
 
 // DrainServer puts a server into drain mode (completes existing connections, no new ones)
 func (c *Client) DrainServer(backendName, serverName string) error {
-	return c.SetServerState(backendName, serverName, "drain")
+	return c.SetServerState(context.Background(), backendName, serverName, "drain")
 }
 
 // ReadyServer puts a server into ready mode (accepts new connections)
 func (c *Client) ReadyServer(backendName, serverName string) error {
-	return c.SetServerState(backendName, serverName, "ready")
+	return c.SetServerState(context.Background(), backendName, serverName, "ready")
 }
 
 // MaintainServer puts a server into maintenance mode (no connections)
 func (c *Client) MaintainServer(backendName, serverName string) error {
-	return c.SetServerState(backendName, serverName, "maint")
+	return c.SetServerState(context.Background(), backendName, serverName, "maint")
 }
 
 // makeRequest is a helper for making authenticated HTTP requests
