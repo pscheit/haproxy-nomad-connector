@@ -1,6 +1,6 @@
-# CLAUDE.md
+# Haproxy and Nomad Connector 
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Read @~/yay/CLAUDE.md 
 
 ## Project Overview
 
