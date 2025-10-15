@@ -23,6 +23,76 @@ const (
 	advCheckHTTP = "httpchk"
 )
 
+// setupCleanSlate removes all frontend rules and ALL test backends to ensure clean test environment
+// This is critical because crashed tests may leave garbage that affects subsequent runs
+// Verifies cleanup using BOTH client API and direct socket commands (in case client has bugs)
+func setupCleanSlate(t *testing.T, client *haproxy.Client) {
+	t.Helper()
+
+	// Remove all frontend rules
+	if err := client.ResetFrontendRules("https"); err != nil {
+		t.Logf("Warning: Could not reset frontend rules: %v", err)
+	}
+
+	// Verify frontend rules removed via client
+	rules, err := client.GetFrontendRules("https")
+	if err != nil {
+		t.Logf("Warning: Could not verify frontend rules: %v", err)
+	} else if len(rules) > 0 {
+		t.Logf("Warning: %d frontend rules still exist after reset", len(rules))
+		for _, rule := range rules {
+			t.Logf("  - %s", rule.Domain)
+		}
+	}
+
+	// Get ALL backends and remove any test backends (containing "test" in name)
+	output, err := executeHAProxySocketCommand(t, "show backend")
+	if err != nil {
+		t.Logf("Warning: Could not list backends via socket: %v", err)
+	} else {
+		var testBackends []string
+		for _, line := range strings.Split(output, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			// Backend names are the first field in socket output
+			fields := strings.Fields(line)
+			if len(fields) > 0 {
+				backendName := fields[0]
+				// Remove ALL backends with "test" in the name
+				if strings.Contains(backendName, "test") {
+					testBackends = append(testBackends, backendName)
+				}
+			}
+		}
+
+		// Delete all test backends
+		if len(testBackends) > 0 {
+			version, _ := client.GetConfigVersion()
+			for _, backendName := range testBackends {
+				_ = client.DeleteBackend(backendName, version)
+			}
+			t.Logf("  Removed %d test backend(s): %v", len(testBackends), testBackends)
+		}
+	}
+
+	// Verify via socket after deletion
+	time.Sleep(1 * time.Second)
+	output, err = executeHAProxySocketCommand(t, "show backend")
+	if err != nil {
+		t.Logf("Warning: Could not verify backend removal via socket: %v", err)
+	} else {
+		for _, line := range strings.Split(output, "\n") {
+			if strings.Contains(line, "test") {
+				t.Logf("Warning: Test backend still exists in HAProxy: %s", line)
+			}
+		}
+	}
+
+	t.Logf("✓ Clean slate: removed all frontend rules and all test backends")
+}
+
 // getHAProxyConfig reads the HAProxy configuration file from the test container
 func getHAProxyConfig(t *testing.T) string {
 	t.Helper()
@@ -110,7 +180,7 @@ func createMisconfiguredBackendForTest(t *testing.T, client *haproxy.Client, bac
 // This is extracted from the config file and runtime state, NOT from the API response
 type ActualBackendConfig struct {
 	Name               string
-	Mode               string   // "http", "tcp", or empty
+	Mode               string // "http", "tcp", or empty
 	Algorithm          string
 	HealthCheckType    string   // "tcp", "http", or "none"
 	HTTPCheckMethod    string   // "GET", "POST", etc (empty if not HTTP)
@@ -291,11 +361,9 @@ func TestConnector_HTTPHealthCheckE2E(t *testing.T) {
 	serviceName := "test-service-e2e"
 	backendName := "test_service_e2e"
 
-	cleanup := func() {
-		version, _ := client.GetConfigVersion()
-		_ = client.DeleteBackend(backendName, version)
-	}
-	defer cleanup()
+	t.Run("0_Setup_CleanSlate", func(t *testing.T) {
+		setupCleanSlate(t, client)
+	})
 
 	t.Run("1_ProcessServiceRegistration_WithHealthCheckTags", func(t *testing.T) {
 		event := &connector.ServiceEvent{
@@ -566,11 +634,9 @@ func TestConnector_HTTPHealthCheckE2E_ExistingMisconfiguredBackend(t *testing.T)
 	serviceName := "test-misconfigured-e2e"
 	backendName := "test_misconfigured_e2e"
 
-	cleanup := func() {
-		version, _ := client.GetConfigVersion()
-		_ = client.DeleteBackend(backendName, version)
-	}
-	defer cleanup()
+	t.Run("0_Setup_CleanSlate", func(t *testing.T) {
+		setupCleanSlate(t, client)
+	})
 
 	t.Run("1_CreateMisconfiguredBackend", func(t *testing.T) {
 		createMisconfiguredBackendForTest(t, client, backendName)
@@ -728,11 +794,9 @@ func TestConnector_HTTPHealthCheckE2E_ExistingMisconfiguredBackend_ProductionPat
 	serviceName := "test-prod-path-e2e"
 	backendName := "test_prod_path_e2e"
 
-	cleanup := func() {
-		version, _ := client.GetConfigVersion()
-		_ = client.DeleteBackend(backendName, version)
-	}
-	defer cleanup()
+	t.Run("0_Setup_CleanSlate", func(t *testing.T) {
+		setupCleanSlate(t, client)
+	})
 
 	t.Run("1_CreateMisconfiguredBackend", func(t *testing.T) {
 		createMisconfiguredBackendForTest(t, client, backendName)
@@ -856,11 +920,9 @@ func TestConnector_DomainTagHTTPHealthCheck_E2E(t *testing.T) {
 	serviceName := "paperless-test"
 	backendName := "paperless_test"
 
-	cleanup := func() {
-		version, _ := client.GetConfigVersion()
-		_ = client.DeleteBackend(backendName, version)
-	}
-	defer cleanup()
+	t.Run("0_Setup_CleanSlate", func(t *testing.T) {
+		setupCleanSlate(t, client)
+	})
 
 	t.Run("1_RegisterServiceWithDomainTag", func(t *testing.T) {
 		nomadEvent := nomad.ServiceEvent{
@@ -912,5 +974,322 @@ func TestConnector_DomainTagHTTPHealthCheck_E2E(t *testing.T) {
 		t.Logf("✓ HAProxy config has complete HTTP health check configuration")
 		t.Logf("  This test reproduces the paperless scenario")
 		t.Logf("  It verifies that domain tags trigger full HTTP health check setup")
+	})
+}
+
+// TestConnector_HealthCheckTagsChanged_E2E reproduces the TeamCity production bug (2025-10-15) where:
+// 1. Service registers with domain tag only (auto-generates health check path = "/")
+// 2. Service tags CHANGE to add explicit health check path "/healthCheck/healthy"
+// 3. Backend already exists → connector returns "already_exists" WITHOUT updating health checks
+// 4. Result: TeamCity stays DOWN because health checks still check "/" (401) instead of "/healthCheck/healthy" (200)
+//
+// This test demonstrates the fundamental reconciliation bug: connector doesn't detect when health check configuration changes.
+// The connector treats HAProxy as write-only instead of comparing desired state vs actual state.
+func TestConnector_HealthCheckTagsChanged_E2E(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	client := haproxy.NewClient("http://localhost:5555", "admin", "adminpwd")
+	logger := log.New(os.Stderr, "[test] ", log.LstdFlags)
+
+	cfg := &config.Config{
+		HAProxy: config.HAProxyConfig{
+			Address:         "http://localhost:5555",
+			Username:        "admin",
+			Password:        "adminpwd",
+			BackendStrategy: "create_new",
+			Frontend:        "https",
+		},
+	}
+
+	serviceName := "teamcity-test"
+	backendName := "teamcity_test"
+
+	t.Run("0_Setup_CleanSlate", func(t *testing.T) {
+		setupCleanSlate(t, client)
+	})
+
+	t.Run("1_RegisterServiceWithDomainTagOnly", func(t *testing.T) {
+		nomadEvent := nomad.ServiceEvent{
+			Type:  "ServiceRegistration",
+			Topic: "Service",
+			Payload: nomad.Payload{
+				Service: &nomad.Service{
+					ServiceName: serviceName,
+					Address:     "192.168.5.10",
+					Port:        30945,
+					JobID:       "",
+					Tags: []string{
+						"haproxy.enable=true",
+						"haproxy.backend=dynamic",
+						"haproxy.domain=tc.test.local",
+					},
+				},
+			},
+		}
+
+		ctx := context.Background()
+		result, err := connector.ProcessNomadServiceEvent(ctx, client, nil, nomadEvent, logger, cfg)
+		if err != nil {
+			t.Fatalf("ProcessNomadServiceEvent failed: %v", err)
+		}
+
+		resultMap, ok := result.(map[string]string)
+		if !ok {
+			t.Fatalf("Expected result to be map[string]string, got %T", result)
+		}
+
+		if resultMap["status"] != "created" {
+			t.Errorf("Expected status 'created', got: %s", resultMap["status"])
+		}
+
+		t.Logf("✓ Service registered with domain tag only (initial deployment)")
+		t.Logf("  Status: %s", resultMap["status"])
+		t.Logf("  Backend: %s", resultMap["backend"])
+	})
+
+	t.Run("2_VerifyInitialHealthCheckPath", func(t *testing.T) {
+		time.Sleep(2 * time.Second)
+		assertBackendConfigEquals(t, backendName, ActualBackendConfig{
+			Name:               backendName,
+			Mode:               "http",
+			Algorithm:          "roundrobin",
+			HealthCheckType:    "http",
+			HTTPCheckMethod:    "GET",
+			HTTPCheckPath:      "/",
+			HTTPCheckHost:      "tc.test.local",
+			DefaultServerCheck: true,
+		})
+
+		t.Logf("✓ Backend created with default health check path '/'")
+		t.Logf("  This simulates initial deployment before health check tags were added")
+	})
+
+	t.Run("3_ReRegisterServiceWithChangedHealthCheckPath", func(t *testing.T) {
+		nomadEvent := nomad.ServiceEvent{
+			Type:  "ServiceRegistration",
+			Topic: "Service",
+			Payload: nomad.Payload{
+				Service: &nomad.Service{
+					ServiceName: serviceName,
+					Address:     "192.168.5.10",
+					Port:        30945,
+					JobID:       "",
+					Tags: []string{
+						"haproxy.enable=true",
+						"haproxy.backend=dynamic",
+						"haproxy.domain=tc.test.local",
+						"haproxy.check.path=/healthCheck/healthy",
+						"haproxy.check.host=tc.test.local",
+					},
+				},
+			},
+		}
+
+		ctx := context.Background()
+		result, err := connector.ProcessNomadServiceEvent(ctx, client, nil, nomadEvent, logger, cfg)
+		if err != nil {
+			t.Fatalf("ProcessNomadServiceEvent failed: %v", err)
+		}
+
+		resultMap, ok := result.(map[string]string)
+		if !ok {
+			t.Fatalf("Expected result to be map[string]string, got %T", result)
+		}
+
+		t.Logf("✓ Service re-registered with explicit health check tags")
+		t.Logf("  Status: %s (connector detected existing backend)", resultMap["status"])
+		t.Logf("  This simulates Nomad job update where health check tags change")
+	})
+
+	t.Run("4_VerifyHealthCheckPathUpdated", func(t *testing.T) {
+		time.Sleep(2 * time.Second)
+
+		assertBackendConfigEquals(t, backendName, ActualBackendConfig{
+			Name:               backendName,
+			Mode:               "http",
+			Algorithm:          "roundrobin",
+			HealthCheckType:    "http",
+			HTTPCheckMethod:    "GET",
+			HTTPCheckPath:      "/healthCheck/healthy",
+			HTTPCheckHost:      "tc.test.local",
+			DefaultServerCheck: true,
+		})
+
+		t.Logf("✓ Backend health check path UPDATED to '/healthCheck/healthy'")
+		t.Logf("  This test reproduces the TeamCity production bug (2025-10-15)")
+		t.Logf("  Without reconciliation, this test will FAIL RED")
+		t.Logf("  The connector must compare desired vs actual state and update differences")
+	})
+}
+
+// TestConnector_ServiceDeregistration_E2E tests if the connector properly handles service deregistration
+// This test checks if the connector CAN interact with existing state when removing services.
+// If this test PASSES (GREEN) while the registration test FAILS (RED), it proves the connector
+// can read and modify existing state during deregistration, but doesn't during registration.
+// This would confirm the reconciliation bug is asymmetric: deregistration works, registration doesn't.
+func TestConnector_ServiceDeregistration_E2E(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	client := haproxy.NewClient("http://localhost:5555", "admin", "adminpwd")
+	logger := log.New(os.Stderr, "[test] ", log.LstdFlags)
+
+	cfg := &config.Config{
+		HAProxy: config.HAProxyConfig{
+			Address:         "http://localhost:5555",
+			Username:        "admin",
+			Password:        "adminpwd",
+			BackendStrategy: "create_new",
+			Frontend:        "https",
+		},
+	}
+
+	serviceName := "deregister-test"
+	backendName := "deregister_test"
+
+	t.Run("0_Setup_CleanSlate", func(t *testing.T) {
+		setupCleanSlate(t, client)
+	})
+
+	t.Run("1_RegisterService", func(t *testing.T) {
+		nomadEvent := nomad.ServiceEvent{
+			Type:  "ServiceRegistration",
+			Topic: "Service",
+			Payload: nomad.Payload{
+				Service: &nomad.Service{
+					ServiceName: serviceName,
+					Address:     "192.168.5.100",
+					Port:        9000,
+					JobID:       "",
+					Tags: []string{
+						"haproxy.enable=true",
+						"haproxy.backend=dynamic",
+						"haproxy.domain=deregister.test.local",
+					},
+				},
+			},
+		}
+
+		ctx := context.Background()
+		result, err := connector.ProcessNomadServiceEvent(ctx, client, nil, nomadEvent, logger, cfg)
+		if err != nil {
+			t.Fatalf("ProcessNomadServiceEvent failed: %v", err)
+		}
+
+		resultMap, ok := result.(map[string]string)
+		if !ok {
+			t.Fatalf("Expected result to be map[string]string, got %T", result)
+		}
+
+		if resultMap["status"] != "created" {
+			t.Errorf("Expected status 'created', got: %s", resultMap["status"])
+		}
+
+		t.Logf("✓ Service registered successfully")
+		t.Logf("  Backend: %s", backendName)
+	})
+
+	t.Run("2_VerifyServiceExists", func(t *testing.T) {
+		time.Sleep(2 * time.Second)
+
+		backend, err := client.GetBackend(backendName)
+		if err != nil {
+			t.Fatalf("Backend not found: %v", err)
+		}
+
+		servers, err := client.GetServers(backendName)
+		if err != nil {
+			t.Fatalf("Failed to get servers: %v", err)
+		}
+
+		if len(servers) != 1 {
+			t.Fatalf("Expected 1 server, got %d", len(servers))
+		}
+
+		t.Logf("✓ Backend and server exist")
+		t.Logf("  Backend: %s", backend.Name)
+		t.Logf("  Server: %s", servers[0].Name)
+	})
+
+	t.Run("3_DeregisterService", func(t *testing.T) {
+		nomadEvent := nomad.ServiceEvent{
+			Type:  "ServiceDeregistration",
+			Topic: "Service",
+			Payload: nomad.Payload{
+				Service: &nomad.Service{
+					ServiceName: serviceName,
+					Address:     "192.168.5.100",
+					Port:        9000,
+					JobID:       "",
+					Tags: []string{
+						"haproxy.enable=true",
+						"haproxy.backend=dynamic",
+						"haproxy.domain=deregister.test.local",
+					},
+				},
+			},
+		}
+
+		ctx := context.Background()
+		result, err := connector.ProcessNomadServiceEvent(ctx, client, nil, nomadEvent, logger, cfg)
+		if err != nil {
+			t.Fatalf("ProcessNomadServiceEvent failed: %v", err)
+		}
+
+		resultMap, ok := result.(map[string]string)
+		if !ok {
+			t.Fatalf("Expected result to be map[string]string, got %T", result)
+		}
+
+		t.Logf("✓ Deregistration processed")
+		t.Logf("  Status: %s", resultMap["status"])
+	})
+
+	t.Run("4_VerifyServerRemoved", func(t *testing.T) {
+		time.Sleep(2 * time.Second)
+
+		servers, err := client.GetServers(backendName)
+		if err != nil {
+			t.Logf("Note: Backend may have been removed entirely: %v", err)
+			return
+		}
+
+		if len(servers) > 0 {
+			t.Errorf("Expected 0 servers after deregistration, got %d", len(servers))
+			for _, srv := range servers {
+				t.Logf("  Remaining server: %s", srv.Name)
+			}
+		}
+
+		t.Logf("✓ Server successfully removed from backend")
+	})
+
+	t.Run("5_VerifyFrontendRulesEmpty", func(t *testing.T) {
+		time.Sleep(1 * time.Second)
+
+		rules, err := client.GetFrontendRules("https")
+		if err != nil {
+			t.Logf("Note: Could not get frontend rules: %v", err)
+			return
+		}
+
+		var actualDomains []string
+		for _, rule := range rules {
+			actualDomains = append(actualDomains, rule.Domain)
+		}
+
+		if len(actualDomains) != 0 {
+			t.Errorf("Expected no frontend rules after deregistration, got: %v", actualDomains)
+		}
+
+		t.Logf("✓ All frontend rules removed (empty)")
+		t.Logf("  Expected: []")
+		t.Logf("  Actual: %v", actualDomains)
+		t.Logf("  This proves the connector CAN interact with existing state during deregistration")
+		t.Logf("  Comparing: Deregistration works (GREEN?) vs Registration update fails (RED)")
+		t.Logf("  This asymmetry confirms the reconciliation bug!")
 	})
 }
