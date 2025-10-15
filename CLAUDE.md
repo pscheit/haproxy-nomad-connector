@@ -175,6 +175,15 @@ The `haproxy.backend_strategy` setting controls conflict resolution:
 - Configuration validation happens early in startup
 - Clear error messages for common operational issues
 
+## ⚠️ CRITICAL: CI Policy
+
+- **Check CI on main BEFORE starting work** - Establish baseline
+- **Red CI = P0** - Fix it before starting new work
+- **Only deploy from green commits**
+- **Never let CI stay red for days**
+
+---
+
 ## ⚠️ CRITICAL: Definition of DONE
 
 **ALWAYS use the TodoWrite tool to track tasks according to these criteria. A task is only DONE when ALL criteria are met:**
