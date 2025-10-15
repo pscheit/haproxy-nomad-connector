@@ -136,6 +136,16 @@ func (m *MockHAProxyClient) GetFrontendRules(frontend string) ([]haproxy.Fronten
 	return []haproxy.FrontendRule{}, nil
 }
 
+func (m *MockHAProxyClient) GetHTTPChecks(backendName string) ([]haproxy.HTTPCheck, error) {
+	// Mock implementation - return empty for existing tests
+	return []haproxy.HTTPCheck{}, nil
+}
+
+func (m *MockHAProxyClient) SetHTTPChecks(backendName string, checks []haproxy.HTTPCheck, version int) error {
+	// Mock implementation - no-op for existing tests
+	return nil
+}
+
 func TestServiceRegistrationWithDomainMapping(t *testing.T) {
 	// Setup
 	client := NewMockHAProxyClient()

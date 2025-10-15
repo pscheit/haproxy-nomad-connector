@@ -496,3 +496,18 @@ func (c *Client) setFrontendRulesInTransaction(frontend string, rules []Frontend
 
 	return nil
 }
+
+// SetHTTPChecks replaces all HTTP checks for a backend
+func (c *Client) SetHTTPChecks(backendName string, checks []HTTPCheck, version int) error {
+	path := fmt.Sprintf("/v3/services/haproxy/configuration/backends/%s/http_checks", backendName)
+	var result []HTTPCheck
+	return c.makeRequest(HTTPMethodPUT, path, checks, &result, version)
+}
+
+// GetHTTPChecks returns all HTTP checks for a backend
+func (c *Client) GetHTTPChecks(backendName string) ([]HTTPCheck, error) {
+	var checks []HTTPCheck
+	path := fmt.Sprintf("/v3/services/haproxy/configuration/backends/%s/http_checks", backendName)
+	err := c.makeRequest(HTTPMethodGET, path, nil, &checks, 0)
+	return checks, err
+}

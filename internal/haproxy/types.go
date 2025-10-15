@@ -83,6 +83,20 @@ type HealthCheck struct {
 	Host   string
 }
 
+// HTTPCheck represents an http-check directive (http-check send)
+type HTTPCheck struct {
+	Type    string         `json:"type"`              // "send", "expect", "connect"
+	Method  string         `json:"method,omitempty"`  // GET, POST, HEAD, etc.
+	URI     string         `json:"uri,omitempty"`     // Health check URI
+	Headers []HTTPCheckHdr `json:"headers,omitempty"` // HTTP headers
+}
+
+// HTTPCheckHdr represents an HTTP header in http-check
+type HTTPCheckHdr struct {
+	Name string `json:"name"` // Header name (e.g., "Host")
+	Fmt  string `json:"fmt"`  // Header value
+}
+
 type BackendStrategy string
 
 const (
@@ -151,4 +165,8 @@ type ClientInterface interface {
 	AddFrontendRuleWithType(frontend, domain, backend string, domainType DomainType) error
 	RemoveFrontendRule(frontend, domain string) error
 	GetFrontendRules(frontend string) ([]FrontendRule, error)
+
+	// HTTP check management
+	SetHTTPChecks(backendName string, checks []HTTPCheck, version int) error
+	GetHTTPChecks(backendName string) ([]HTTPCheck, error)
 }

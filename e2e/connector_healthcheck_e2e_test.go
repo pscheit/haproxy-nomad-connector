@@ -135,7 +135,7 @@ func getActualBackendConfig(t *testing.T, backendName string) ActualBackendConfi
 
 	// Find the backend section
 	inBackend := false
-	for i, line := range lines {
+	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
 		// Check if we're entering our backend
@@ -163,7 +163,8 @@ func getActualBackendConfig(t *testing.T, backendName string) ActualBackendConfi
 
 		if strings.Contains(trimmed, "option httpchk") {
 			config.HealthCheckType = "http"
-			// Parse: option httpchk GET /health HTTP/1.1
+			// Parse: option httpchk GET /health HTTP/1.1 (old format)
+			// OR: option httpchk (new format with separate http-check send line)
 			parts := strings.Fields(trimmed)
 			if len(parts) >= 3 {
 				config.HTTPCheckMethod = parts[2]
@@ -173,11 +174,19 @@ func getActualBackendConfig(t *testing.T, backendName string) ActualBackendConfi
 			}
 		}
 
-		if strings.Contains(trimmed, "http-check send hdr Host") {
-			// Parse: http-check send hdr Host example.com
+		if strings.Contains(trimmed, "http-check send") {
+			// Parse: http-check send meth GET uri /healthz hdr Host test-manual.local
 			parts := strings.Fields(trimmed)
-			if len(parts) >= 5 {
-				config.HTTPCheckHost = parts[4]
+			for i := 0; i < len(parts); i++ {
+				if parts[i] == "meth" && i+1 < len(parts) {
+					config.HTTPCheckMethod = parts[i+1]
+				}
+				if parts[i] == "uri" && i+1 < len(parts) {
+					config.HTTPCheckPath = parts[i+1]
+				}
+				if parts[i] == "hdr" && i+1 < len(parts) && parts[i+1] == "Host" && i+2 < len(parts) {
+					config.HTTPCheckHost = parts[i+2]
+				}
 			}
 		}
 
@@ -189,17 +198,6 @@ func getActualBackendConfig(t *testing.T, backendName string) ActualBackendConfi
 			parts := strings.Fields(trimmed)
 			if len(parts) >= 2 {
 				config.Servers = append(config.Servers, parts[1])
-			}
-		}
-
-		// Check next line for http-check after option httpchk
-		if strings.Contains(trimmed, "option httpchk") && i+1 < len(lines) {
-			nextLine := strings.TrimSpace(lines[i+1])
-			if strings.Contains(nextLine, "http-check send hdr Host") {
-				parts := strings.Fields(nextLine)
-				if len(parts) >= 5 {
-					config.HTTPCheckHost = parts[4]
-				}
 			}
 		}
 	}
@@ -332,16 +330,40 @@ func TestConnector_HTTPHealthCheckE2E(t *testing.T) {
 			t.Errorf("Expected AdvCheck=%s, got: %s", advCheckHTTP, backend.AdvCheck)
 		}
 
-		if backend.HTTPCheckParams == nil {
-			t.Fatal("HTTPCheckParams is nil - connector did not configure HTTP health checks!")
+		// Verify HTTP checks via the /http_checks API
+		checks, err := client.GetHTTPChecks(backendName)
+		if err != nil {
+			t.Fatalf("Failed to get HTTP checks: %v", err)
 		}
 
-		if backend.HTTPCheckParams.URI != "/health" {
-			t.Errorf("Expected URI=/health, got: %s", backend.HTTPCheckParams.URI)
+		if len(checks) == 0 {
+			t.Fatal("No HTTP checks found - connector did not configure HTTP health checks!")
+		}
+
+		check := checks[0]
+		if check.URI != "/health" {
+			t.Errorf("Expected URI=/health, got: %s", check.URI)
+		}
+
+		if check.Method != "GET" {
+			t.Errorf("Expected Method=GET, got: %s", check.Method)
+		}
+
+		hostHeaderFound := false
+		for _, hdr := range check.Headers {
+			if hdr.Name == "Host" && hdr.Fmt == "test-e2e.local" {
+				hostHeaderFound = true
+				break
+			}
+		}
+		if !hostHeaderFound {
+			t.Errorf("Expected Host header 'test-e2e.local' not found in HTTP checks")
 		}
 
 		t.Logf("✓ Backend has HTTP health check configuration")
-		t.Logf("  URI: %s", backend.HTTPCheckParams.URI)
+		t.Logf("  URI: %s", check.URI)
+		t.Logf("  Method: %s", check.Method)
+		t.Logf("  Host header: %v", hostHeaderFound)
 	})
 
 	t.Run("3_VerifyActualHAProxyConfig", func(t *testing.T) {
@@ -583,10 +605,16 @@ func TestConnector_HTTPHealthCheckE2E_ExistingMisconfiguredBackend(t *testing.T)
 			t.Error("The connector did not update the existing misconfigured backend!")
 		}
 
-		if backend.HTTPCheckParams == nil {
-			t.Error("BUG (Client): HTTPCheckParams is still nil - connector did not add HTTP health checks to existing backend!")
-		} else if backend.HTTPCheckParams.URI != "/health" {
-			t.Errorf("BUG (Client): Expected URI=/health, got: %s", backend.HTTPCheckParams.URI)
+		// Verify HTTP checks via the /http_checks API
+		checks, err := client.GetHTTPChecks(backendName)
+		if err != nil {
+			t.Fatalf("Failed to get HTTP checks: %v", err)
+		}
+
+		if len(checks) == 0 {
+			t.Error("BUG (Client): No HTTP checks found - connector did not add HTTP health checks to existing backend!")
+		} else if checks[0].URI != "/health" {
+			t.Errorf("BUG (Client): Expected URI=/health, got: %s", checks[0].URI)
 		}
 
 		if backend.DefaultServer == nil {
@@ -597,8 +625,8 @@ func TestConnector_HTTPHealthCheckE2E_ExistingMisconfiguredBackend(t *testing.T)
 
 		t.Logf("✓ Client reports backend has health checks")
 		t.Logf("  AdvCheck: %s", backend.AdvCheck)
-		if backend.HTTPCheckParams != nil {
-			t.Logf("  HTTP Check URI: %s", backend.HTTPCheckParams.URI)
+		if len(checks) > 0 {
+			t.Logf("  HTTP Check URI: %s", checks[0].URI)
 		}
 		if backend.DefaultServer != nil {
 			t.Logf("  DefaultServer Check: %s", backend.DefaultServer.Check)
@@ -742,19 +770,6 @@ func TestConnector_HTTPHealthCheckE2E_ExistingMisconfiguredBackend_ProductionPat
 			t.Fatalf("Failed to get backend: %v", err)
 		}
 
-		t.Logf("Backend configuration after processing:")
-		t.Logf("  AdvCheck: '%s' (should be 'httpchk' for HTTP health checks)", backend.AdvCheck)
-		if backend.HTTPCheckParams != nil {
-			t.Logf("  HTTPCheckParams.URI: '%s' (should be '/healthcheck')", backend.HTTPCheckParams.URI)
-		} else {
-			t.Logf("  HTTPCheckParams: nil")
-		}
-		if backend.DefaultServer != nil {
-			t.Logf("  DefaultServer.Check: '%s'", backend.DefaultServer.Check)
-		} else {
-			t.Logf("  DefaultServer: nil")
-		}
-
 		// Verify ADR-011 fix: Backend should have HTTP health checks configured
 		if backend.AdvCheck != advCheckHTTP {
 			t.Errorf("REGRESSION: Backend missing 'option %s'", advCheckHTTP)
@@ -763,12 +778,29 @@ func TestConnector_HTTPHealthCheckE2E_ExistingMisconfiguredBackend_ProductionPat
 			t.Error("   Impact: Canary becomes 'healthy' when port opens, NOT when app is ready → DOWNTIME")
 		}
 
-		if backend.HTTPCheckParams == nil || backend.HTTPCheckParams.URI != "/healthcheck" {
+		// Verify HTTP checks via the /http_checks API
+		checks, err := client.GetHTTPChecks(backendName)
+		if err != nil {
+			t.Fatalf("Failed to get HTTP checks: %v", err)
+		}
+
+		if len(checks) == 0 || checks[0].URI != "/healthcheck" {
 			t.Error("REGRESSION: Backend missing HTTP check path '/healthcheck'")
 		}
 
 		if backend.DefaultServer == nil || backend.DefaultServer.Check != connector.CheckEnabled {
 			t.Errorf("REGRESSION: Backend missing 'default-server check=%s'", connector.CheckEnabled)
+		}
+
+		t.Logf("Backend configuration after processing:")
+		t.Logf("  AdvCheck: '%s' (should be 'httpchk' for HTTP health checks)", backend.AdvCheck)
+		if len(checks) > 0 {
+			t.Logf("  HTTP Check URI: '%s' (should be '/healthcheck')", checks[0].URI)
+		}
+		if backend.DefaultServer != nil {
+			t.Logf("  DefaultServer.Check: '%s'", backend.DefaultServer.Check)
+		} else {
+			t.Logf("  DefaultServer: nil")
 		}
 
 		// Verify ACTUAL config file has Host header (would have caught the production bug)

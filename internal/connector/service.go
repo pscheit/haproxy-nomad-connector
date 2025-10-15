@@ -261,6 +261,57 @@ func handleServiceRegistration(
 	return result, nil
 }
 
+// isHTTPHealthCheckConfigured checks if HTTP health check is configured
+func isHTTPHealthCheckConfigured(healthCheckConfig *HealthCheckConfig) bool {
+	return healthCheckConfig != nil && healthCheckConfig.Type == CheckTypeHTTP && healthCheckConfig.Path != ""
+}
+
+// buildHTTPChecks creates HTTP check configuration from health check config
+func buildHTTPChecks(healthCheckConfig *HealthCheckConfig) []haproxy.HTTPCheck {
+	method := healthCheckConfig.Method
+	if method == "" {
+		method = HTTPMethodGET
+	}
+
+	check := haproxy.HTTPCheck{
+		Type:   "send",
+		Method: method,
+		URI:    healthCheckConfig.Path,
+	}
+
+	if healthCheckConfig.Host != "" {
+		check.Headers = []haproxy.HTTPCheckHdr{
+			{Name: "Host", Fmt: healthCheckConfig.Host},
+		}
+	}
+
+	return []haproxy.HTTPCheck{check}
+}
+
+// applyHTTPChecksToBackend applies HTTP health checks to a backend via the /http_checks API
+func applyHTTPChecksToBackend(
+	client haproxy.ClientInterface,
+	backendName string,
+	healthCheckConfig *HealthCheckConfig,
+	currentVersion int,
+) (int, error) {
+	if !isHTTPHealthCheckConfigured(healthCheckConfig) {
+		return client.GetConfigVersion()
+	}
+
+	newVersion, err := client.GetConfigVersion()
+	if err != nil {
+		return currentVersion, fmt.Errorf("failed to get config version for http checks: %w", err)
+	}
+
+	checks := buildHTTPChecks(healthCheckConfig)
+	if err := client.SetHTTPChecks(backendName, checks, newVersion); err != nil {
+		return currentVersion, fmt.Errorf("failed to set HTTP checks for backend %s: %w", backendName, err)
+	}
+
+	return client.GetConfigVersion()
+}
+
 // updateBackendHealthChecks updates an existing backend with missing health check configuration (ADR-011)
 func updateBackendHealthChecks(
 	client haproxy.ClientInterface,
@@ -269,11 +320,9 @@ func updateBackendHealthChecks(
 	healthCheckConfig *HealthCheckConfig,
 	version int,
 ) (newVersion int, err error) {
-	// Check if DefaultServer is missing or doesn't have check enabled
 	needsUpdate := existingBackend.DefaultServer == nil || existingBackend.DefaultServer.Check != CheckEnabled
 
-	// Check if HTTP health checks are specified but missing
-	if !needsUpdate && healthCheckConfig != nil && healthCheckConfig.Type == CheckTypeHTTP && healthCheckConfig.Path != "" {
+	if !needsUpdate && isHTTPHealthCheckConfigured(healthCheckConfig) {
 		needsUpdate = existingBackend.AdvCheck != AdvCheckHTTP || existingBackend.HTTPCheckParams == nil
 	}
 
@@ -281,7 +330,6 @@ func updateBackendHealthChecks(
 		return version, nil
 	}
 
-	// Build updated backend with correct configuration
 	updatedBackend := &haproxy.Backend{
 		Name: backendName,
 		Balance: haproxy.Balance{
@@ -292,19 +340,8 @@ func updateBackendHealthChecks(
 		},
 	}
 
-	// Configure HTTP health checks at backend level if specified
-	if healthCheckConfig != nil && healthCheckConfig.Type == CheckTypeHTTP && healthCheckConfig.Path != "" {
+	if isHTTPHealthCheckConfigured(healthCheckConfig) {
 		updatedBackend.AdvCheck = AdvCheckHTTP
-		updatedBackend.HTTPCheckParams = &haproxy.HTTPCheckParams{
-			Method: healthCheckConfig.Method,
-			URI:    healthCheckConfig.Path,
-			Host:   healthCheckConfig.Host,
-		}
-
-		// Default to GET if no method specified
-		if updatedBackend.HTTPCheckParams.Method == "" {
-			updatedBackend.HTTPCheckParams.Method = HTTPMethodGET
-		}
 	}
 
 	_, err = client.ReplaceBackend(updatedBackend, version)
@@ -312,8 +349,7 @@ func updateBackendHealthChecks(
 		return version, fmt.Errorf("failed to update backend %s with health check configuration: %w", backendName, err)
 	}
 
-	newVersion, err = client.GetConfigVersion()
-	return newVersion, err
+	return applyHTTPChecksToBackend(client, backendName, healthCheckConfig, version)
 }
 
 // ensureBackend ensures the backend exists and is compatible
@@ -336,29 +372,15 @@ func ensureBackend(client haproxy.ClientInterface, backendName string, version i
 		Balance: haproxy.Balance{
 			Algorithm: "roundrobin",
 		},
-		// Always set default_server with check enabled - this ensures health checks work
-		// automatically for all servers (TCP by default, HTTP if configured below)
 		DefaultServer: &haproxy.Server{
 			Check: CheckEnabled,
 		},
 	}
 
-	// Extract health check configuration from tags
 	healthCheckConfig := parseHealthCheckFromTags(tags)
 
-	// Configure HTTP health checks at backend level if specified
-	if healthCheckConfig != nil && healthCheckConfig.Type == CheckTypeHTTP && healthCheckConfig.Path != "" {
+	if isHTTPHealthCheckConfigured(healthCheckConfig) {
 		backend.AdvCheck = AdvCheckHTTP
-		backend.HTTPCheckParams = &haproxy.HTTPCheckParams{
-			Method: healthCheckConfig.Method,
-			URI:    healthCheckConfig.Path,
-			Host:   healthCheckConfig.Host,
-		}
-
-		// Default to GET if no method specified
-		if backend.HTTPCheckParams.Method == "" {
-			backend.HTTPCheckParams.Method = HTTPMethodGET
-		}
 	}
 
 	_, err = client.CreateBackend(backend, version)
@@ -366,7 +388,7 @@ func ensureBackend(client haproxy.ClientInterface, backendName string, version i
 		return version, fmt.Errorf("failed to create backend %s: %w", backendName, err)
 	}
 
-	return client.GetConfigVersion()
+	return applyHTTPChecksToBackend(client, backendName, healthCheckConfig, version)
 }
 
 // ensureServer ensures the server exists in the backend
@@ -726,7 +748,6 @@ func ensureBackendWithHealthCheck(client haproxy.ClientInterface, backendName st
 		return updateBackendHealthChecks(client, backendName, existingBackend, healthCheckConfig, version)
 	}
 
-	// Create new backend with health check configuration
 	backend := haproxy.Backend{
 		Name: backendName,
 		Balance: haproxy.Balance{
@@ -737,18 +758,8 @@ func ensureBackendWithHealthCheck(client haproxy.ClientInterface, backendName st
 		},
 	}
 
-	// Configure HTTP health checks at backend level if specified
-	if healthCheckConfig != nil && healthCheckConfig.Type == CheckTypeHTTP && healthCheckConfig.Path != "" {
+	if isHTTPHealthCheckConfigured(healthCheckConfig) {
 		backend.AdvCheck = AdvCheckHTTP
-		backend.HTTPCheckParams = &haproxy.HTTPCheckParams{
-			Method: healthCheckConfig.Method,
-			URI:    healthCheckConfig.Path,
-			Host:   healthCheckConfig.Host,
-		}
-
-		if backend.HTTPCheckParams.Method == "" {
-			backend.HTTPCheckParams.Method = HTTPMethodGET
-		}
 	}
 
 	_, err = client.CreateBackend(backend, version)
@@ -756,7 +767,7 @@ func ensureBackendWithHealthCheck(client haproxy.ClientInterface, backendName st
 		return 0, fmt.Errorf("failed to create backend %s: %w", backendName, err)
 	}
 
-	return client.GetConfigVersion()
+	return applyHTTPChecksToBackend(client, backendName, healthCheckConfig, version)
 }
 
 // checkServerExists checks if server already exists and returns result if it does

@@ -226,6 +226,16 @@ func (m *mockHAProxyClient) GetFrontendRules(frontend string) ([]haproxy.Fronten
 	return []haproxy.FrontendRule{}, nil
 }
 
+func (m *mockHAProxyClient) GetHTTPChecks(backendName string) ([]haproxy.HTTPCheck, error) {
+	// Mock implementation - return empty for existing tests
+	return []haproxy.HTTPCheck{}, nil
+}
+
+func (m *mockHAProxyClient) SetHTTPChecks(backendName string, checks []haproxy.HTTPCheck, version int) error {
+	// Mock implementation - no-op for existing tests
+	return nil
+}
+
 // Helper methods for thread-safe access to test state
 func (m *mockHAProxyClient) wasDrainCalled() bool {
 	m.mu.Lock()
