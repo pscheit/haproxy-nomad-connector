@@ -17,6 +17,8 @@ const (
 	CheckTypeHTTP     = "http"
 	CheckTypeTCP      = "tcp"
 	CheckTypeDisabled = "disabled"
+	CheckEnabled      = "enabled"
+	AdvCheckHTTP      = "httpchk"
 	HTTPMethodGET     = "GET"
 )
 
@@ -259,9 +261,62 @@ func handleServiceRegistration(
 	return result, nil
 }
 
+// updateBackendHealthChecks updates an existing backend with missing health check configuration (ADR-011)
+func updateBackendHealthChecks(
+	client haproxy.ClientInterface,
+	backendName string,
+	existingBackend *haproxy.Backend,
+	healthCheckConfig *HealthCheckConfig,
+	version int,
+) (newVersion int, err error) {
+	// Check if DefaultServer is missing or doesn't have check enabled
+	needsUpdate := existingBackend.DefaultServer == nil || existingBackend.DefaultServer.Check != CheckEnabled
+
+	// Check if HTTP health checks are specified but missing
+	if !needsUpdate && healthCheckConfig != nil && healthCheckConfig.Type == CheckTypeHTTP && healthCheckConfig.Path != "" {
+		needsUpdate = existingBackend.AdvCheck != AdvCheckHTTP || existingBackend.HTTPCheckParams == nil
+	}
+
+	if !needsUpdate {
+		return version, nil
+	}
+
+	// Build updated backend with correct configuration
+	updatedBackend := &haproxy.Backend{
+		Name: backendName,
+		Balance: haproxy.Balance{
+			Algorithm: "roundrobin",
+		},
+		DefaultServer: &haproxy.Server{
+			Check: CheckEnabled,
+		},
+	}
+
+	// Configure HTTP health checks at backend level if specified
+	if healthCheckConfig != nil && healthCheckConfig.Type == CheckTypeHTTP && healthCheckConfig.Path != "" {
+		updatedBackend.AdvCheck = AdvCheckHTTP
+		updatedBackend.HTTPCheckParams = &haproxy.HTTPCheckParams{
+			Method: healthCheckConfig.Method,
+			URI:    healthCheckConfig.Path,
+			Host:   healthCheckConfig.Host,
+		}
+
+		// Default to GET if no method specified
+		if updatedBackend.HTTPCheckParams.Method == "" {
+			updatedBackend.HTTPCheckParams.Method = HTTPMethodGET
+		}
+	}
+
+	_, err = client.ReplaceBackend(updatedBackend, version)
+	if err != nil {
+		return version, fmt.Errorf("failed to update backend %s with health check configuration: %w", backendName, err)
+	}
+
+	newVersion, err = client.GetConfigVersion()
+	return newVersion, err
+}
+
 // ensureBackend ensures the backend exists and is compatible
-//
-//nolint:gocyclo,goconst // Complexity justified by health check detection and update logic
 func ensureBackend(client haproxy.ClientInterface, backendName string, version int, tags []string) (int, error) {
 	existingBackend, err := client.GetBackend(backendName)
 	if err == nil {
@@ -270,58 +325,10 @@ func ensureBackend(client haproxy.ClientInterface, backendName string, version i
 				backendName, existingBackend.Balance.Algorithm)
 		}
 
-		// Check if existing backend is missing health check configuration
+		// ADR-011: Check and update existing backend if missing health check configuration
 		healthCheckConfig := parseHealthCheckFromTags(tags)
-		needsUpdate := false
-
-		// Check if DefaultServer is missing or doesn't have check enabled
-		if existingBackend.DefaultServer == nil || existingBackend.DefaultServer.Check != "enabled" {
-			needsUpdate = true
-		}
-
-		// Check if HTTP health checks are specified but missing
-		if healthCheckConfig != nil && healthCheckConfig.Type == CheckTypeHTTP && healthCheckConfig.Path != "" {
-			if existingBackend.AdvCheck != "httpchk" || existingBackend.HTTPCheckParams == nil {
-				needsUpdate = true
-			}
-		}
-
-		// If backend needs updating, replace it with correct configuration
-		if needsUpdate {
-			updatedBackend := &haproxy.Backend{
-				Name: backendName,
-				Balance: haproxy.Balance{
-					Algorithm: "roundrobin",
-				},
-				DefaultServer: &haproxy.Server{
-					Check: "enabled",
-				},
-			}
-
-			// Configure HTTP health checks at backend level if specified
-			if healthCheckConfig != nil && healthCheckConfig.Type == CheckTypeHTTP && healthCheckConfig.Path != "" {
-				updatedBackend.AdvCheck = "httpchk"
-				updatedBackend.HTTPCheckParams = &haproxy.HTTPCheckParams{
-					Method: healthCheckConfig.Method,
-					URI:    healthCheckConfig.Path,
-					Host:   healthCheckConfig.Host,
-				}
-
-				// Default to GET if no method specified
-				if updatedBackend.HTTPCheckParams.Method == "" {
-					updatedBackend.HTTPCheckParams.Method = HTTPMethodGET
-				}
-			}
-
-			_, err = client.ReplaceBackend(updatedBackend, version)
-			if err != nil {
-				return version, fmt.Errorf("failed to update backend %s with health check configuration: %w", backendName, err)
-			}
-
-			return client.GetConfigVersion()
-		}
-
-		return version, nil
+		newVersion, updateErr := updateBackendHealthChecks(client, backendName, existingBackend, healthCheckConfig, version)
+		return newVersion, updateErr
 	}
 
 	backend := haproxy.Backend{
@@ -332,7 +339,7 @@ func ensureBackend(client haproxy.ClientInterface, backendName string, version i
 		// Always set default_server with check enabled - this ensures health checks work
 		// automatically for all servers (TCP by default, HTTP if configured below)
 		DefaultServer: &haproxy.Server{
-			Check: "enabled",
+			Check: CheckEnabled,
 		},
 	}
 
@@ -341,7 +348,7 @@ func ensureBackend(client haproxy.ClientInterface, backendName string, version i
 
 	// Configure HTTP health checks at backend level if specified
 	if healthCheckConfig != nil && healthCheckConfig.Type == CheckTypeHTTP && healthCheckConfig.Path != "" {
-		backend.AdvCheck = "httpchk"
+		backend.AdvCheck = AdvCheckHTTP
 		backend.HTTPCheckParams = &haproxy.HTTPCheckParams{
 			Method: healthCheckConfig.Method,
 			URI:    healthCheckConfig.Path,
@@ -379,7 +386,7 @@ func ensureServer(client haproxy.ClientInterface, backendName, serverName, addre
 		Name:    serverName,
 		Address: address,
 		Port:    port,
-		Check:   "enabled",
+		Check:   CheckEnabled,
 	}
 
 	_, err = client.CreateServer(backendName, &server, version)
@@ -648,8 +655,6 @@ func handleCustomServiceDeregistration(
 }
 
 // handleServiceRegistrationWithHealthCheck handles service registration with health check synchronization
-//
-//nolint:gocyclo,funlen // Pre-existing complexity and length, refactoring would require significant changes
 func handleServiceRegistrationWithHealthCheck(
 	_ context.Context,
 	client haproxy.ClientInterface,
@@ -658,97 +663,24 @@ func handleServiceRegistrationWithHealthCheck(
 	logger *log.Logger,
 	frontendName string,
 ) (interface{}, error) {
-	version, err := client.GetConfigVersion()
+	backendName := sanitizeServiceName(event.Service.ServiceName)
+	serverName := generateServerName(event.Service.ServiceName, event.Service.Address, event.Service.Port)
+
+	// Ensure backend exists with proper health check configuration
+	version, err := ensureBackendWithHealthCheck(client, backendName, event.Service.Tags)
 	if err != nil {
 		return nil, err
 	}
 
-	backendName := sanitizeServiceName(event.Service.ServiceName)
-
-	// Extract health check configuration from tags BEFORE creating backend
-	healthCheckConfig := parseHealthCheckFromTags(event.Service.Tags)
-
-	existingBackend, err := client.GetBackend(backendName)
-	if err == nil {
-		if !haproxy.IsBackendCompatibleForDynamicService(existingBackend) {
-			return nil, fmt.Errorf("backend %s already exists with incompatible configuration (algorithm: %s, expected: roundrobin)",
-				backendName, existingBackend.Balance.Algorithm)
-		}
-	} else {
-		backend := haproxy.Backend{
-			Name: backendName,
-			Balance: haproxy.Balance{
-				Algorithm: "roundrobin",
-			},
-			// Always set default_server with check enabled - this ensures health checks work
-			// automatically for all servers (TCP by default, HTTP if configured below)
-			DefaultServer: &haproxy.Server{
-				Check: "enabled",
-			},
-		}
-
-		// Configure HTTP health checks at backend level if specified
-		if healthCheckConfig != nil && healthCheckConfig.Type == CheckTypeHTTP && healthCheckConfig.Path != "" {
-			backend.AdvCheck = "httpchk"
-			backend.HTTPCheckParams = &haproxy.HTTPCheckParams{
-				Method: healthCheckConfig.Method,
-				URI:    healthCheckConfig.Path,
-				Host:   healthCheckConfig.Host,
-			}
-
-			// Default to GET if no method specified
-			if backend.HTTPCheckParams.Method == "" {
-				backend.HTTPCheckParams.Method = HTTPMethodGET
-			}
-		}
-
-		_, err = client.CreateBackend(backend, version)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create backend %s: %w", backendName, err)
-		}
-
-		version, err = client.GetConfigVersion()
-		if err != nil {
-			return nil, err
-		}
+	// Check if server already exists
+	serverExists, existingResult := checkServerExists(
+		client, backendName, serverName, event.Service.ServiceName, event.Service.Tags, frontendName)
+	if serverExists {
+		return existingResult, nil
 	}
 
-	serverName := generateServerName(event.Service.ServiceName, event.Service.Address, event.Service.Port)
-
-	existingServers, err := client.GetServers(backendName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get existing servers for backend %s: %w", backendName, err)
-	}
-
-	for _, existingServer := range existingServers {
-		if existingServer.Name == serverName {
-			// Initialize result map for existing server
-			result := map[string]string{
-				"status":  StatusAlreadyExists,
-				"backend": backendName,
-				"server":  serverName,
-			}
-
-			// ALWAYS reconcile frontend rules (regardless of server existence)
-			reconcileErr := reconcileFrontendRule(client, event.Service.ServiceName, event.Service.Tags, backendName, result, frontendName)
-			if reconcileErr != nil {
-				return nil, reconcileErr
-			}
-
-			return result, nil
-		}
-	}
-
-	// Try to fetch health check configuration from Nomad
-	var serviceCheck *nomad.ServiceCheck
-	if event.Service.JobID != "" && nomadClient != nil {
-		serviceCheck, err = nomadClient.GetServiceCheckFromJob(event.Service.JobID, event.Service.ServiceName)
-		if err != nil {
-			logger.Printf("Warning: Failed to get health check from Nomad for service %s in job %s: %v",
-				event.Service.ServiceName, event.Service.JobID, err)
-			// Continue with default health check
-		}
-	}
+	// Fetch health check from Nomad if available
+	serviceCheck := fetchNomadHealthCheck(nomadClient, event.Service.JobID, event.Service.ServiceName, logger)
 
 	// Create server with health check configuration
 	server := createServerWithHealthCheck(&event.Service, serverName, serviceCheck, event.Service.Tags, logger)
@@ -758,9 +690,6 @@ func handleServiceRegistrationWithHealthCheck(
 		return nil, fmt.Errorf("failed to create server %s in backend %s: %w", serverName, backendName, err)
 	}
 
-	// Note: Health checks are enabled automatically when backend has default_server.check=enabled
-	// No socket commands or Runtime API calls needed in HAProxy 3.0
-
 	// Initialize result map
 	result := map[string]string{
 		"status":     StatusCreated,
@@ -769,12 +698,119 @@ func handleServiceRegistrationWithHealthCheck(
 		"check_type": server.CheckType,
 	}
 
-	// ALWAYS reconcile frontend rules (regardless of server existence)
+	// ALWAYS reconcile frontend rules
 	if err := reconcileFrontendRule(client, event.Service.ServiceName, event.Service.Tags, backendName, result, frontendName); err != nil {
 		return nil, err
 	}
 
 	return result, nil
+}
+
+// ensureBackendWithHealthCheck ensures backend exists and has proper health check configuration
+func ensureBackendWithHealthCheck(client haproxy.ClientInterface, backendName string, tags []string) (int, error) {
+	version, err := client.GetConfigVersion()
+	if err != nil {
+		return 0, err
+	}
+
+	healthCheckConfig := parseHealthCheckFromTags(tags)
+
+	existingBackend, err := client.GetBackend(backendName)
+	if err == nil {
+		if !haproxy.IsBackendCompatibleForDynamicService(existingBackend) {
+			return 0, fmt.Errorf("backend %s already exists with incompatible configuration (algorithm: %s, expected: roundrobin)",
+				backendName, existingBackend.Balance.Algorithm)
+		}
+
+		// ADR-011: Check and update existing backend if missing health check configuration
+		return updateBackendHealthChecks(client, backendName, existingBackend, healthCheckConfig, version)
+	}
+
+	// Create new backend with health check configuration
+	backend := haproxy.Backend{
+		Name: backendName,
+		Balance: haproxy.Balance{
+			Algorithm: "roundrobin",
+		},
+		DefaultServer: &haproxy.Server{
+			Check: CheckEnabled,
+		},
+	}
+
+	// Configure HTTP health checks at backend level if specified
+	if healthCheckConfig != nil && healthCheckConfig.Type == CheckTypeHTTP && healthCheckConfig.Path != "" {
+		backend.AdvCheck = AdvCheckHTTP
+		backend.HTTPCheckParams = &haproxy.HTTPCheckParams{
+			Method: healthCheckConfig.Method,
+			URI:    healthCheckConfig.Path,
+			Host:   healthCheckConfig.Host,
+		}
+
+		if backend.HTTPCheckParams.Method == "" {
+			backend.HTTPCheckParams.Method = HTTPMethodGET
+		}
+	}
+
+	_, err = client.CreateBackend(backend, version)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create backend %s: %w", backendName, err)
+	}
+
+	return client.GetConfigVersion()
+}
+
+// checkServerExists checks if server already exists and returns result if it does
+func checkServerExists(
+	client haproxy.ClientInterface,
+	backendName, serverName, serviceName string,
+	tags []string,
+	frontendName string,
+) (exists bool, result interface{}) {
+	existingServers, err := client.GetServers(backendName)
+	if err != nil {
+		// If we can't get servers, assume it doesn't exist
+		return false, nil
+	}
+
+	for _, existingServer := range existingServers {
+		if existingServer.Name == serverName {
+			result := map[string]string{
+				"status":  StatusAlreadyExists,
+				"backend": backendName,
+				"server":  serverName,
+			}
+
+			// ALWAYS reconcile frontend rules
+			reconcileErr := reconcileFrontendRule(client, serviceName, tags, backendName, result, frontendName)
+			if reconcileErr != nil {
+				return true, nil // Return exists=true but nil result to indicate error
+			}
+
+			return true, result
+		}
+	}
+
+	return false, nil
+}
+
+// fetchNomadHealthCheck fetches health check configuration from Nomad
+func fetchNomadHealthCheck(
+	nomadClient *nomad.Client,
+	jobID, serviceName string,
+	logger *log.Logger,
+) *nomad.ServiceCheck {
+	if jobID == "" || nomadClient == nil {
+		return nil
+	}
+
+	serviceCheck, err := nomadClient.GetServiceCheckFromJob(jobID, serviceName)
+	if err != nil {
+		logger.Printf("Warning: Failed to get health check from Nomad for service %s in job %s: %v",
+			serviceName, jobID, err)
+		return nil
+	}
+
+	return serviceCheck
 }
 
 // createServerWithHealthCheck creates a server with appropriate health check configuration
@@ -789,7 +825,7 @@ func createServerWithHealthCheck(
 		Name:    serverName,
 		Address: service.Address,
 		Port:    service.Port,
-		Check:   "enabled", // Default
+		Check:   CheckEnabled, // Default
 	}
 
 	// Priority: Tags > Nomad job spec > default

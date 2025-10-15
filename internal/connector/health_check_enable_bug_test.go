@@ -96,8 +96,8 @@ func TestHealthCheckEnabledAfterServerCreation(t *testing.T) {
 
 	if mock.createdBackend.DefaultServer == nil {
 		t.Errorf("REGRESSION: Backend created without default_server - health checks won't work")
-	} else if mock.createdBackend.DefaultServer.Check != "enabled" {
-		t.Errorf("REGRESSION: Backend default_server.check is not 'enabled' (got: %s) - servers would remain in MAINT mode",
-			mock.createdBackend.DefaultServer.Check)
+	} else if mock.createdBackend.DefaultServer.Check != CheckEnabled {
+		t.Errorf("REGRESSION: Backend default_server.check is not %q (got: %s) - servers would remain in MAINT mode",
+			CheckEnabled, mock.createdBackend.DefaultServer.Check)
 	}
 }
