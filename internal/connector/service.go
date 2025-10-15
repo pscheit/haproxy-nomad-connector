@@ -327,7 +327,13 @@ func updateBackendHealthChecks(
 	// Fetch actual HTTP checks for complete comparison
 	var existingHTTPChecks []haproxy.HTTPCheck
 	if isHTTPHealthCheckConfigured(healthCheckConfig) {
-		existingHTTPChecks, _ = client.GetHTTPChecks(backendName)
+		checks, httpCheckErr := client.GetHTTPChecks(backendName)
+		if httpCheckErr != nil {
+			// If we can't fetch HTTP checks, assume they don't match and update
+			// This is safer than silently ignoring the error
+			return applyBackendUpdate(client, desiredBackend, backendName, healthCheckConfig, version)
+		}
+		existingHTTPChecks = checks
 	}
 
 	// Compare DESIRED vs ACTUAL state - if they match, no update needed
@@ -335,8 +341,18 @@ func updateBackendHealthChecks(
 		return version, nil
 	}
 
-	// State differs - apply the desired configuration
-	_, err = client.ReplaceBackend(desiredBackend, version)
+	return applyBackendUpdate(client, desiredBackend, backendName, healthCheckConfig, version)
+}
+
+// applyBackendUpdate applies the desired backend configuration
+func applyBackendUpdate(
+	client haproxy.ClientInterface,
+	desiredBackend *haproxy.Backend,
+	backendName string,
+	healthCheckConfig *HealthCheckConfig,
+	version int,
+) (int, error) {
+	_, err := client.ReplaceBackend(desiredBackend, version)
 	if err != nil {
 		return version, fmt.Errorf("failed to update backend %s with health check configuration: %w", backendName, err)
 	}
@@ -377,8 +393,8 @@ func backendConfigMatches(
 	existingHTTPChecks []haproxy.HTTPCheck,
 	healthCheckConfig *HealthCheckConfig,
 ) bool {
-	// Check DefaultServer
-	if existing.DefaultServer == nil || existing.DefaultServer.Check != desired.DefaultServer.Check {
+	// Check DefaultServer configuration
+	if !defaultServerMatches(existing, desired) {
 		return false
 	}
 
@@ -387,37 +403,63 @@ func backendConfigMatches(
 		return true
 	}
 
-	// For HTTP health checks, compare Mode, AdvCheck, HTTPCheckParams
-	if existing.Mode != desired.Mode {
+	// For HTTP health checks, compare Mode, AdvCheck, HTTPCheckParams, and Host header
+	return httpHealthCheckMatches(existing, desired, existingHTTPChecks, healthCheckConfig)
+}
+
+// defaultServerMatches checks if DefaultServer configuration matches
+func defaultServerMatches(existing, desired *haproxy.Backend) bool {
+	if existing.DefaultServer == nil || existing.DefaultServer.Check != desired.DefaultServer.Check {
+		return false
+	}
+	return true
+}
+
+// httpHealthCheckMatches checks if HTTP health check configuration matches
+func httpHealthCheckMatches(
+	existing, desired *haproxy.Backend,
+	existingHTTPChecks []haproxy.HTTPCheck,
+	healthCheckConfig *HealthCheckConfig,
+) bool {
+	// Compare Mode and AdvCheck
+	if existing.Mode != desired.Mode || existing.AdvCheck != desired.AdvCheck {
 		return false
 	}
 
-	if existing.AdvCheck != desired.AdvCheck {
-		return false
-	}
-
-	// Compare HTTPCheckParams (URI and Method)
-	if existing.HTTPCheckParams == nil || desired.HTTPCheckParams == nil {
-		return existing.HTTPCheckParams == desired.HTTPCheckParams
-	}
-
-	if existing.HTTPCheckParams.URI != desired.HTTPCheckParams.URI {
-		return false
-	}
-
-	desiredMethod := desired.HTTPCheckParams.Method
-	if desiredMethod == "" {
-		desiredMethod = HTTPMethodGET
-	}
-	existingMethod := existing.HTTPCheckParams.Method
-	if existingMethod == "" {
-		existingMethod = HTTPMethodGET
-	}
-	if existingMethod != desiredMethod {
+	// Compare HTTPCheckParams
+	if !httpCheckParamsMatch(existing.HTTPCheckParams, desired.HTTPCheckParams) {
 		return false
 	}
 
 	// Compare Host header from actual http-check directives
+	return httpCheckHostMatches(existingHTTPChecks, healthCheckConfig.Host)
+}
+
+// httpCheckParamsMatch compares HTTPCheckParams (URI and Method)
+func httpCheckParamsMatch(existing, desired *haproxy.HTTPCheckParams) bool {
+	if existing == nil || desired == nil {
+		return existing == desired
+	}
+
+	if existing.URI != desired.URI {
+		return false
+	}
+
+	existingMethod := existing.Method
+	if existingMethod == "" {
+		existingMethod = HTTPMethodGET
+	}
+
+	desiredMethod := desired.Method
+	if desiredMethod == "" {
+		desiredMethod = HTTPMethodGET
+	}
+
+	return existingMethod == desiredMethod
+}
+
+// httpCheckHostMatches compares Host header from http-check directives
+func httpCheckHostMatches(existingHTTPChecks []haproxy.HTTPCheck, desiredHost string) bool {
 	existingHost := ""
 	if len(existingHTTPChecks) > 0 {
 		for _, hdr := range existingHTTPChecks[0].Headers {
@@ -428,13 +470,7 @@ func backendConfigMatches(
 		}
 	}
 
-	desiredHost := healthCheckConfig.Host
-	if existingHost != desiredHost {
-		return false
-	}
-
-	// All fields match - no update needed
-	return true
+	return existingHost == desiredHost
 }
 
 // ensureBackend ensures the backend exists and is compatible (uses reconciliation pattern)
