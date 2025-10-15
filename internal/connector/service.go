@@ -437,44 +437,26 @@ func backendConfigMatches(
 	return true
 }
 
-// ensureBackend ensures the backend exists and is compatible
+// ensureBackend ensures the backend exists and is compatible (uses reconciliation pattern)
 func ensureBackend(client haproxy.ClientInterface, backendName string, version int, tags []string) (int, error) {
+	healthCheckConfig := parseHealthCheckFromTags(tags)
+
 	existingBackend, err := client.GetBackend(backendName)
 	if err == nil {
+		// Backend exists - verify compatibility and reconcile configuration
 		if !haproxy.IsBackendCompatibleForDynamicService(existingBackend) {
 			return version, fmt.Errorf("backend %s already exists with incompatible configuration (algorithm: %s, expected: roundrobin)",
 				backendName, existingBackend.Balance.Algorithm)
 		}
 
-		// ADR-011: Check and update existing backend if missing health check configuration
-		healthCheckConfig := parseHealthCheckFromTags(tags)
-		newVersion, updateErr := updateBackendHealthChecks(client, backendName, existingBackend, healthCheckConfig, version)
-		return newVersion, updateErr
+		// Reconcile: Update existing backend if configuration differs
+		return updateBackendHealthChecks(client, backendName, existingBackend, healthCheckConfig, version)
 	}
 
-	healthCheckConfig := parseHealthCheckFromTags(tags)
+	// Backend doesn't exist - create with desired configuration
+	desiredBackend := buildDesiredBackend(backendName, healthCheckConfig)
 
-	backend := haproxy.Backend{
-		Name: backendName,
-		Balance: haproxy.Balance{
-			Algorithm: "roundrobin",
-		},
-		DefaultServer: &haproxy.Server{
-			Check: CheckEnabled,
-		},
-	}
-
-	if isHTTPHealthCheckConfigured(healthCheckConfig) {
-		backend.Mode = CheckTypeHTTP
-		backend.AdvCheck = AdvCheckHTTP
-		backend.HTTPCheckParams = &haproxy.HTTPCheckParams{
-			Method:  healthCheckConfig.Method,
-			URI:     healthCheckConfig.Path,
-			Version: "HTTP/1.1",
-		}
-	}
-
-	_, err = client.CreateBackend(backend, version)
+	_, err = client.CreateBackend(*desiredBackend, version)
 	if err != nil {
 		return version, fmt.Errorf("failed to create backend %s: %w", backendName, err)
 	}
@@ -819,52 +801,15 @@ func handleServiceRegistrationWithHealthCheck(
 	return result, nil
 }
 
-// ensureBackendWithHealthCheck ensures backend exists and has proper health check configuration
+// ensureBackendWithHealthCheck ensures backend exists and has proper health check configuration (uses reconciliation pattern)
 func ensureBackendWithHealthCheck(client haproxy.ClientInterface, backendName string, tags []string) (int, error) {
 	version, err := client.GetConfigVersion()
 	if err != nil {
 		return 0, err
 	}
 
-	healthCheckConfig := parseHealthCheckFromTags(tags)
-
-	existingBackend, err := client.GetBackend(backendName)
-	if err == nil {
-		if !haproxy.IsBackendCompatibleForDynamicService(existingBackend) {
-			return 0, fmt.Errorf("backend %s already exists with incompatible configuration (algorithm: %s, expected: roundrobin)",
-				backendName, existingBackend.Balance.Algorithm)
-		}
-
-		// ADR-011: Check and update existing backend if missing health check configuration
-		return updateBackendHealthChecks(client, backendName, existingBackend, healthCheckConfig, version)
-	}
-
-	backend := haproxy.Backend{
-		Name: backendName,
-		Balance: haproxy.Balance{
-			Algorithm: "roundrobin",
-		},
-		DefaultServer: &haproxy.Server{
-			Check: CheckEnabled,
-		},
-	}
-
-	if isHTTPHealthCheckConfigured(healthCheckConfig) {
-		backend.Mode = CheckTypeHTTP
-		backend.AdvCheck = AdvCheckHTTP
-		backend.HTTPCheckParams = &haproxy.HTTPCheckParams{
-			Method:  healthCheckConfig.Method,
-			URI:     healthCheckConfig.Path,
-			Version: "HTTP/1.1",
-		}
-	}
-
-	_, err = client.CreateBackend(backend, version)
-	if err != nil {
-		return 0, fmt.Errorf("failed to create backend %s: %w", backendName, err)
-	}
-
-	return applyHTTPChecksToBackend(client, backendName, healthCheckConfig, version)
+	// Delegate to ensureBackend which now uses reconciliation pattern consistently
+	return ensureBackend(client, backendName, version, tags)
 }
 
 // checkServerExists checks if server already exists and returns result if it does
