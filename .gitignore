@@ -21,6 +21,8 @@ dev/general/
 dev/maps/
 dev/spoe/
 dev/ssl/
+dev/haproxy.cfg
+dev/haproxy.cfg.lkg
 /.idea
 build/
 .idea/
