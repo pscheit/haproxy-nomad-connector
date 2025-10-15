@@ -83,7 +83,7 @@ func ProcessServiceEvent(
 func ProcessNomadServiceEvent(
 	ctx context.Context,
 	haproxyClient haproxy.ClientInterface,
-	nomadClient *nomad.Client,
+	nomadClient nomad.NomadClient,
 	event nomad.ServiceEvent,
 	logger *log.Logger,
 	cfg *config.Config,
@@ -118,7 +118,7 @@ func ProcessNomadServiceEvent(
 func ProcessServiceEventWithHealthCheckAndConfig(
 	ctx context.Context,
 	haproxyClient haproxy.ClientInterface,
-	nomadClient *nomad.Client,
+	nomadClient nomad.NomadClient,
 	event *ServiceEvent,
 	logger *log.Logger,
 	cfg *config.Config,
@@ -193,7 +193,7 @@ func processDynamicService(
 func processDynamicServiceWithHealthCheckAndConfig(
 	ctx context.Context,
 	client haproxy.ClientInterface,
-	nomadClient *nomad.Client,
+	nomadClient nomad.NomadClient,
 	event *ServiceEvent,
 	logger *log.Logger,
 	drainTimeoutSec int,
@@ -789,7 +789,7 @@ func handleCustomServiceDeregistration(
 func handleServiceRegistrationWithHealthCheck(
 	_ context.Context,
 	client haproxy.ClientInterface,
-	nomadClient *nomad.Client,
+	nomadClient nomad.NomadClient,
 	event *ServiceEvent,
 	logger *log.Logger,
 	frontendName string,
@@ -885,7 +885,7 @@ func checkServerExists(
 
 // fetchNomadHealthCheck fetches health check configuration from Nomad
 func fetchNomadHealthCheck(
-	nomadClient *nomad.Client,
+	nomadClient nomad.NomadClient,
 	jobID, serviceName string,
 	logger *log.Logger,
 ) *nomad.ServiceCheck {

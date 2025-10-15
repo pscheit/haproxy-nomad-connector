@@ -23,7 +23,7 @@ const (
 // Connector manages the integration between Nomad and HAProxy
 type Connector struct {
 	config        *config.Config
-	nomadClient   *nomad.Client
+	nomadClient   nomad.NomadClient
 	haproxyClient *haproxy.Client
 	logger        *log.Logger
 
