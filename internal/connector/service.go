@@ -804,8 +804,11 @@ func handleServiceRegistrationWithHealthCheck(
 	}
 
 	// Check if server already exists
-	serverExists, existingResult := checkServerExists(
+	serverExists, existingResult, err := checkServerExists(
 		client, backendName, serverName, event.Service.ServiceName, event.Service.Tags, frontendName)
+	if err != nil {
+		return nil, err
+	}
 	if serverExists {
 		return existingResult, nil
 	}
@@ -854,11 +857,10 @@ func checkServerExists(
 	backendName, serverName, serviceName string,
 	tags []string,
 	frontendName string,
-) (exists bool, result interface{}) {
+) (exists bool, result interface{}, err error) {
 	existingServers, err := client.GetServers(backendName)
 	if err != nil {
-		// If we can't get servers, assume it doesn't exist
-		return false, nil
+		return false, nil, fmt.Errorf("failed to get servers for backend %s: %w", backendName, err)
 	}
 
 	for _, existingServer := range existingServers {
@@ -870,16 +872,15 @@ func checkServerExists(
 			}
 
 			// ALWAYS reconcile frontend rules
-			reconcileErr := reconcileFrontendRule(client, serviceName, tags, backendName, result, frontendName)
-			if reconcileErr != nil {
-				return true, nil // Return exists=true but nil result to indicate error
+			if err := reconcileFrontendRule(client, serviceName, tags, backendName, result, frontendName); err != nil {
+				return true, nil, fmt.Errorf("failed to reconcile frontend rule: %w", err)
 			}
 
-			return true, result
+			return true, result, nil
 		}
 	}
 
-	return false, nil
+	return false, nil, nil
 }
 
 // fetchNomadHealthCheck fetches health check configuration from Nomad
