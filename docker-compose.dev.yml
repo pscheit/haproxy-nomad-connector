@@ -2,6 +2,8 @@ services:
   haproxy:
     image: haproxytech/haproxy-alpine:3.0
     container_name: haproxy-test
+    entrypoint: ["/usr/local/etc/haproxy/docker-entrypoint.sh"]
+    command: ["haproxy", "-W", "-db", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
     ports:
       - "8080:80"
       - "8443:443"   # https
