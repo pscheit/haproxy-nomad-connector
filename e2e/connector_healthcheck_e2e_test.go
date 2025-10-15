@@ -23,74 +23,37 @@ const (
 	advCheckHTTP = "httpchk"
 )
 
-// setupCleanSlate removes all frontend rules and ALL test backends to ensure clean test environment
-// This is critical because crashed tests may leave garbage that affects subsequent runs
-// Verifies cleanup using BOTH client API and direct socket commands (in case client has bugs)
+// setupCleanSlate restarts HAProxy container to get a completely clean baseline config
+// This is the SIMPLEST and MOST RELIABLE way to ensure no leftover state from previous tests
+// DataPlane API has no "reset to baseline" endpoint, so we just restart the container
 func setupCleanSlate(t *testing.T, client *haproxy.Client) {
 	t.Helper()
 
-	// Remove all frontend rules
-	if err := client.ResetFrontendRules("https"); err != nil {
-		t.Logf("Warning: Could not reset frontend rules: %v", err)
+	ctx := context.Background()
+
+	// Restart HAProxy container with 1s timeout - this reloads base config and clears ALL dynamic changes
+	t.Log("Restarting HAProxy container to get clean baseline config...")
+	restartCmd := exec.CommandContext(ctx, "docker", "restart", "-t", "1", "haproxy-test")
+	if err := restartCmd.Run(); err != nil {
+		t.Fatalf("FATAL: Could not restart HAProxy container: %v", err)
 	}
 
-	// Verify frontend rules removed via client
-	rules, err := client.GetFrontendRules("https")
-	if err != nil {
-		t.Logf("Warning: Could not verify frontend rules: %v", err)
-	} else if len(rules) > 0 {
-		t.Logf("Warning: %d frontend rules still exist after reset", len(rules))
-		for _, rule := range rules {
-			t.Logf("  - %s", rule.Domain)
+	// Wait for HAProxy to fully start and DataPlane API to be available
+	t.Log("Waiting for HAProxy and DataPlane API to be ready...")
+	maxAttempts := 30
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		_, err := client.GetConfigVersion()
+		if err == nil {
+			t.Logf("✓ HAProxy restarted and DataPlane API ready after %d seconds", attempt)
+			return
 		}
+
+		if attempt == maxAttempts {
+			t.Fatalf("FATAL: DataPlane API not ready after %d seconds: %v", maxAttempts, err)
+		}
+
+		time.Sleep(1 * time.Second)
 	}
-
-	// Get ALL backends and remove any test backends (containing "test" in name)
-	output, err := executeHAProxySocketCommand(t, "show backend")
-	if err != nil {
-		t.Logf("Warning: Could not list backends via socket: %v", err)
-	} else {
-		var testBackends []string
-		for _, line := range strings.Split(output, "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			// Backend names are the first field in socket output
-			fields := strings.Fields(line)
-			if len(fields) > 0 {
-				backendName := fields[0]
-				// Remove ALL backends with "test" in the name
-				if strings.Contains(backendName, "test") {
-					testBackends = append(testBackends, backendName)
-				}
-			}
-		}
-
-		// Delete all test backends
-		if len(testBackends) > 0 {
-			version, _ := client.GetConfigVersion()
-			for _, backendName := range testBackends {
-				_ = client.DeleteBackend(backendName, version)
-			}
-			t.Logf("  Removed %d test backend(s): %v", len(testBackends), testBackends)
-		}
-	}
-
-	// Verify via socket after deletion
-	time.Sleep(1 * time.Second)
-	output, err = executeHAProxySocketCommand(t, "show backend")
-	if err != nil {
-		t.Logf("Warning: Could not verify backend removal via socket: %v", err)
-	} else {
-		for _, line := range strings.Split(output, "\n") {
-			if strings.Contains(line, "test") {
-				t.Logf("Warning: Test backend still exists in HAProxy: %s", line)
-			}
-		}
-	}
-
-	t.Logf("✓ Clean slate: removed all frontend rules and all test backends")
 }
 
 // getHAProxyConfig reads the HAProxy configuration file from the test container
@@ -1267,7 +1230,7 @@ func TestConnector_ServiceDeregistration_E2E(t *testing.T) {
 		t.Logf("✓ Server successfully removed from backend")
 	})
 
-	t.Run("5_VerifyFrontendRulesEmpty", func(t *testing.T) {
+	t.Run("5_VerifyFrontendRuleRemoved", func(t *testing.T) {
 		time.Sleep(1 * time.Second)
 
 		rules, err := client.GetFrontendRules("https")
@@ -1285,11 +1248,9 @@ func TestConnector_ServiceDeregistration_E2E(t *testing.T) {
 			t.Errorf("Expected no frontend rules after deregistration, got: %v", actualDomains)
 		}
 
-		t.Logf("✓ All frontend rules removed (empty)")
+		t.Logf("✓ Frontend rule removed successfully")
 		t.Logf("  Expected: []")
 		t.Logf("  Actual: %v", actualDomains)
-		t.Logf("  This proves the connector CAN interact with existing state during deregistration")
-		t.Logf("  Comparing: Deregistration works (GREEN?) vs Registration update fails (RED)")
-		t.Logf("  This asymmetry confirms the reconciliation bug!")
+		t.Logf("  This proves the connector properly handles deregistration")
 	})
 }

@@ -313,6 +313,7 @@ func applyHTTPChecksToBackend(
 }
 
 // updateBackendHealthChecks updates an existing backend with missing health check configuration (ADR-011)
+// This function implements proper reconciliation by comparing desired vs actual state (Kubernetes pattern)
 func updateBackendHealthChecks(
 	client haproxy.ClientInterface,
 	backendName string,
@@ -320,17 +321,32 @@ func updateBackendHealthChecks(
 	healthCheckConfig *HealthCheckConfig,
 	version int,
 ) (newVersion int, err error) {
-	needsUpdate := existingBackend.DefaultServer == nil || existingBackend.DefaultServer.Check != CheckEnabled
+	// Build DESIRED backend configuration from health check config
+	desiredBackend := buildDesiredBackend(backendName, healthCheckConfig)
 
-	if !needsUpdate && isHTTPHealthCheckConfigured(healthCheckConfig) {
-		needsUpdate = existingBackend.AdvCheck != AdvCheckHTTP || existingBackend.HTTPCheckParams == nil
+	// Fetch actual HTTP checks for complete comparison
+	var existingHTTPChecks []haproxy.HTTPCheck
+	if isHTTPHealthCheckConfigured(healthCheckConfig) {
+		existingHTTPChecks, _ = client.GetHTTPChecks(backendName)
 	}
 
-	if !needsUpdate {
+	// Compare DESIRED vs ACTUAL state - if they match, no update needed
+	if backendConfigMatches(existingBackend, desiredBackend, existingHTTPChecks, healthCheckConfig) {
 		return version, nil
 	}
 
-	updatedBackend := &haproxy.Backend{
+	// State differs - apply the desired configuration
+	_, err = client.ReplaceBackend(desiredBackend, version)
+	if err != nil {
+		return version, fmt.Errorf("failed to update backend %s with health check configuration: %w", backendName, err)
+	}
+
+	return applyHTTPChecksToBackend(client, backendName, healthCheckConfig, version)
+}
+
+// buildDesiredBackend constructs the desired backend configuration from health check config
+func buildDesiredBackend(backendName string, healthCheckConfig *HealthCheckConfig) *haproxy.Backend {
+	backend := &haproxy.Backend{
 		Name: backendName,
 		Balance: haproxy.Balance{
 			Algorithm: "roundrobin",
@@ -341,21 +357,84 @@ func updateBackendHealthChecks(
 	}
 
 	if isHTTPHealthCheckConfigured(healthCheckConfig) {
-		updatedBackend.Mode = CheckTypeHTTP
-		updatedBackend.AdvCheck = AdvCheckHTTP
-		updatedBackend.HTTPCheckParams = &haproxy.HTTPCheckParams{
+		backend.Mode = CheckTypeHTTP
+		backend.AdvCheck = AdvCheckHTTP
+		backend.HTTPCheckParams = &haproxy.HTTPCheckParams{
 			Method:  healthCheckConfig.Method,
 			URI:     healthCheckConfig.Path,
 			Version: "HTTP/1.1",
 		}
 	}
 
-	_, err = client.ReplaceBackend(updatedBackend, version)
-	if err != nil {
-		return version, fmt.Errorf("failed to update backend %s with health check configuration: %w", backendName, err)
+	return backend
+}
+
+// backendConfigMatches compares desired backend config with actual state
+// Returns true if they match (no update needed), false if they differ (update required)
+func backendConfigMatches(
+	existing *haproxy.Backend,
+	desired *haproxy.Backend,
+	existingHTTPChecks []haproxy.HTTPCheck,
+	healthCheckConfig *HealthCheckConfig,
+) bool {
+	// Check DefaultServer
+	if existing.DefaultServer == nil || existing.DefaultServer.Check != desired.DefaultServer.Check {
+		return false
 	}
 
-	return applyHTTPChecksToBackend(client, backendName, healthCheckConfig, version)
+	// If no HTTP health check configured, we only care about DefaultServer check
+	if !isHTTPHealthCheckConfigured(healthCheckConfig) {
+		return true
+	}
+
+	// For HTTP health checks, compare Mode, AdvCheck, HTTPCheckParams
+	if existing.Mode != desired.Mode {
+		return false
+	}
+
+	if existing.AdvCheck != desired.AdvCheck {
+		return false
+	}
+
+	// Compare HTTPCheckParams (URI and Method)
+	if existing.HTTPCheckParams == nil || desired.HTTPCheckParams == nil {
+		return existing.HTTPCheckParams == desired.HTTPCheckParams
+	}
+
+	if existing.HTTPCheckParams.URI != desired.HTTPCheckParams.URI {
+		return false
+	}
+
+	desiredMethod := desired.HTTPCheckParams.Method
+	if desiredMethod == "" {
+		desiredMethod = HTTPMethodGET
+	}
+	existingMethod := existing.HTTPCheckParams.Method
+	if existingMethod == "" {
+		existingMethod = HTTPMethodGET
+	}
+	if existingMethod != desiredMethod {
+		return false
+	}
+
+	// Compare Host header from actual http-check directives
+	existingHost := ""
+	if len(existingHTTPChecks) > 0 {
+		for _, hdr := range existingHTTPChecks[0].Headers {
+			if hdr.Name == "Host" {
+				existingHost = hdr.Fmt
+				break
+			}
+		}
+	}
+
+	desiredHost := healthCheckConfig.Host
+	if existingHost != desiredHost {
+		return false
+	}
+
+	// All fields match - no update needed
+	return true
 }
 
 // ensureBackend ensures the backend exists and is compatible
