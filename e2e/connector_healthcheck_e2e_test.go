@@ -232,11 +232,26 @@ func TestConnector_HTTPHealthCheckE2E(t *testing.T) {
 			t.Error("Server never appeared in HAProxy stats after 30 seconds")
 			t.Log("DEBUG: Dumping diagnostic information...")
 
+			// Check if socket exists
+			socketCheckCmd := exec.Command("docker", "exec", "haproxy-test", "sh", "-c",
+				"ls -la /tmp/haproxy.sock || echo 'Socket does not exist'")
+			socketCheckOutput, _ := socketCheckCmd.Output()
+			t.Logf("DEBUG: Socket check:\n%s", string(socketCheckOutput))
+
+			// Show raw stats output
+			rawStatsCmd := exec.Command("docker", "exec", "haproxy-test", "sh", "-c",
+				"echo 'show stat' | socat stdio /tmp/haproxy.sock | head -30")
+			rawStatsOutput, rawErr := rawStatsCmd.CombinedOutput()
+			t.Logf("DEBUG: Raw 'show stat' output (first 30 lines):\n%s", string(rawStatsOutput))
+			if rawErr != nil {
+				t.Logf("DEBUG: Error from 'show stat': %v", rawErr)
+			}
+
 			// Show all backends in stats
 			allStatsCmd := exec.Command("docker", "exec", "haproxy-test", "sh", "-c",
 				"echo 'show stat' | socat stdio /tmp/haproxy.sock | grep ',BACKEND,' | head -20")
 			allStatsOutput, _ := allStatsCmd.Output()
-			t.Logf("DEBUG: All backends in runtime stats:\n%s", string(allStatsOutput))
+			t.Logf("DEBUG: Backends in stats (filtered):\n%s", string(allStatsOutput))
 
 			// Check if our backend exists in config
 			configCmd := exec.Command("docker", "exec", "haproxy-test", "sh", "-c",
