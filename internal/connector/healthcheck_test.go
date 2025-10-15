@@ -9,20 +9,22 @@ import (
 	"github.com/pscheit/haproxy-nomad-connector/internal/nomad"
 )
 
-func TestParseHealthCheckFromTags(t *testing.T) {
+func TestResolveHealthCheckConfig(t *testing.T) {
 	tests := []struct {
-		name     string
-		tags     []string
-		expected *HealthCheckConfig
+		name       string
+		tags       []string
+		nomadCheck *nomad.ServiceCheck
+		expected   *HealthCheckConfig
 	}{
 		{
-			name: "HTTP health check from tags",
+			name: "HTTP health check from explicit tags",
 			tags: []string{
 				"haproxy.enable=true",
 				"haproxy.check.path=/health",
 				"haproxy.check.method=GET",
 				"haproxy.check.host=api.internal",
 			},
+			nomadCheck: nil,
 			expected: &HealthCheckConfig{
 				Type:   "http",
 				Path:   "/health",
@@ -36,6 +38,7 @@ func TestParseHealthCheckFromTags(t *testing.T) {
 				"haproxy.enable=true",
 				"haproxy.check.type=tcp",
 			},
+			nomadCheck: nil,
 			expected: &HealthCheckConfig{
 				Type: "tcp",
 			},
@@ -46,18 +49,20 @@ func TestParseHealthCheckFromTags(t *testing.T) {
 				"haproxy.enable=true",
 				"haproxy.check.disabled",
 			},
+			nomadCheck: nil,
 			expected: &HealthCheckConfig{
 				Type:     "disabled",
 				Disabled: true,
 			},
 		},
 		{
-			name: "No health check tags",
+			name: "No health check tags or nomad check",
 			tags: []string{
 				"haproxy.enable=true",
 				"haproxy.backend=dynamic",
 			},
-			expected: nil,
+			nomadCheck: nil,
+			expected:   nil,
 		},
 		{
 			name: "Implicit HTTP from path",
@@ -65,16 +70,55 @@ func TestParseHealthCheckFromTags(t *testing.T) {
 				"haproxy.enable=true",
 				"haproxy.check.path=/api/health",
 			},
+			nomadCheck: nil,
 			expected: &HealthCheckConfig{
-				Type: "http",
-				Path: "/api/health",
+				Type:   "http",
+				Path:   "/api/health",
+				Method: "GET",
+			},
+		},
+		{
+			name: "Nomad check overrides domain fallback",
+			tags: []string{
+				"haproxy.enable=true",
+				"haproxy.domain=example.com",
+			},
+			nomadCheck: &nomad.ServiceCheck{
+				Type:   "http",
+				Path:   "/healthcheck",
+				Method: "GET",
+			},
+			expected: &HealthCheckConfig{
+				Type:   "http",
+				Path:   "/healthcheck",
+				Method: "GET",
+				Host:   "example.com", // Preserved from domain!
+			},
+		},
+		{
+			name: "Explicit tags override Nomad check but preserve Host",
+			tags: []string{
+				"haproxy.enable=true",
+				"haproxy.domain=example.com",
+				"haproxy.check.path=/api/health",
+			},
+			nomadCheck: &nomad.ServiceCheck{
+				Type:   "http",
+				Path:   "/ignored",
+				Method: "POST",
+			},
+			expected: &HealthCheckConfig{
+				Type:   "http",
+				Path:   "/api/health", // From explicit tag
+				Method: "GET",
+				Host:   "example.com", // Preserved from domain!
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := parseHealthCheckFromTags(tt.tags)
+			result := resolveHealthCheckConfig(tt.tags, tt.nomadCheck)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

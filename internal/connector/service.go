@@ -475,7 +475,7 @@ func httpCheckHostMatches(existingHTTPChecks []haproxy.HTTPCheck, desiredHost st
 
 // ensureBackend ensures the backend exists and is compatible (uses reconciliation pattern)
 func ensureBackend(client haproxy.ClientInterface, backendName string, version int, tags []string) (int, error) {
-	healthCheckConfig := parseHealthCheckFromTags(tags)
+	healthCheckConfig := resolveHealthCheckConfig(tags, nil)
 
 	existingBackend, err := client.GetBackend(backendName)
 	if err == nil {
@@ -797,8 +797,11 @@ func handleServiceRegistrationWithHealthCheck(
 	backendName := sanitizeServiceName(event.Service.ServiceName)
 	serverName := generateServerName(event.Service.ServiceName, event.Service.Address, event.Service.Port)
 
+	// Fetch health check from Nomad if available (needed for backend AND server)
+	serviceCheck := fetchNomadHealthCheck(nomadClient, event.Service.JobID, event.Service.ServiceName, logger)
+
 	// Ensure backend exists with proper health check configuration
-	version, err := ensureBackendWithHealthCheck(client, backendName, event.Service.Tags)
+	version, err := ensureBackendWithHealthCheck(client, backendName, event.Service.Tags, serviceCheck)
 	if err != nil {
 		return nil, err
 	}
@@ -812,9 +815,6 @@ func handleServiceRegistrationWithHealthCheck(
 	if serverExists {
 		return existingResult, nil
 	}
-
-	// Fetch health check from Nomad if available
-	serviceCheck := fetchNomadHealthCheck(nomadClient, event.Service.JobID, event.Service.ServiceName, logger)
 
 	// Create server with health check configuration
 	server := createServerWithHealthCheck(&event.Service, serverName, serviceCheck, event.Service.Tags, logger)
@@ -841,14 +841,41 @@ func handleServiceRegistrationWithHealthCheck(
 }
 
 // ensureBackendWithHealthCheck ensures backend exists and has proper health check configuration (uses reconciliation pattern)
-func ensureBackendWithHealthCheck(client haproxy.ClientInterface, backendName string, tags []string) (int, error) {
+func ensureBackendWithHealthCheck(
+	client haproxy.ClientInterface,
+	backendName string,
+	tags []string,
+	nomadCheck *nomad.ServiceCheck,
+) (int, error) {
 	version, err := client.GetConfigVersion()
 	if err != nil {
 		return 0, err
 	}
 
-	// Delegate to ensureBackend which now uses reconciliation pattern consistently
-	return ensureBackend(client, backendName, version, tags)
+	// Use resolveHealthCheckConfig to properly handle priority
+	healthCheckConfig := resolveHealthCheckConfig(tags, nomadCheck)
+
+	existingBackend, err := client.GetBackend(backendName)
+	if err == nil {
+		// Backend exists - verify compatibility and reconcile configuration
+		if !haproxy.IsBackendCompatibleForDynamicService(existingBackend) {
+			return version, fmt.Errorf("backend %s already exists with incompatible configuration (algorithm: %s, expected: roundrobin)",
+				backendName, existingBackend.Balance.Algorithm)
+		}
+
+		// Reconcile: Update existing backend if configuration differs
+		return updateBackendHealthChecks(client, backendName, existingBackend, healthCheckConfig, version)
+	}
+
+	// Backend doesn't exist - create with desired configuration
+	desiredBackend := buildDesiredBackend(backendName, healthCheckConfig)
+
+	_, err = client.CreateBackend(*desiredBackend, version)
+	if err != nil {
+		return version, fmt.Errorf("failed to create backend %s: %w", backendName, err)
+	}
+
+	return applyHTTPChecksToBackend(client, backendName, healthCheckConfig, version)
 }
 
 // checkServerExists checks if server already exists and returns result if it does
@@ -918,18 +945,11 @@ func createServerWithHealthCheck(
 		Check:   CheckEnabled, // Default
 	}
 
-	// Priority: Tags > Nomad job spec > default
-	// Check for tag overrides first
-	tagCheck := parseHealthCheckFromTags(tags)
-	if tagCheck != nil {
-		applyHealthCheckToServer(&server, tagCheck, "tag", logger)
-		return server
-	}
-
-	// Use Nomad job spec health check
-	if nomadCheck != nil {
-		haproxyCheck := convertNomadToHAProxyCheck(nomadCheck)
-		applyHealthCheckToServer(&server, haproxyCheck, "nomad", logger)
+	// Use centralized resolution with proper priority handling
+	healthCheckConfig := resolveHealthCheckConfig(tags, nomadCheck)
+	if healthCheckConfig != nil {
+		source := determineHealthCheckSource(tags, nomadCheck)
+		applyHealthCheckToServer(&server, healthCheckConfig, source, logger)
 		return server
 	}
 
@@ -940,48 +960,116 @@ func createServerWithHealthCheck(
 	return server
 }
 
-// parseHealthCheckFromTags parses health check configuration from Nomad tags
-func parseHealthCheckFromTags(tags []string) *HealthCheckConfig {
-	var healthConfig HealthCheckConfig
-	found := false
-
+// determineHealthCheckSource determines the source of health check config for logging
+func determineHealthCheckSource(tags []string, nomadCheck *nomad.ServiceCheck) string {
+	// Check for explicit tags (highest priority)
 	for _, tag := range tags {
 		if strings.HasPrefix(tag, "haproxy.check.") {
-			found = true
+			return "tag"
+		}
+	}
+
+	// Check for Nomad check (medium priority)
+	if nomadCheck != nil {
+		return "nomad"
+	}
+
+	// Check for domain tag (lowest priority)
+	domainMapping := parseDomainMapping("", tags)
+	if domainMapping != nil {
+		return "domain-fallback"
+	}
+
+	return "default"
+}
+
+// resolveHealthCheckConfig resolves health check configuration with proper priority
+// Priority (highest to lowest):
+// 1. Explicit tags (haproxy.check.path=..., haproxy.check.host=...)
+// 2. Nomad job check blocks (from job definition)
+// 3. Domain tag fallback (path="/", host=domain from haproxy.domain tag)
+//
+// IMPORTANT: Host header is preserved across priority levels unless explicitly overridden
+// This fixes two critical bugs:
+// - Bug 1: Missing Host header when explicit check.path used with domain tag
+// - Bug 2: Nomad checks ignored in favor of domain fallback (badaba bug)
+func resolveHealthCheckConfig(tags []string, nomadCheck *nomad.ServiceCheck) *HealthCheckConfig { //nolint:gocyclo,funlen
+	// Start with lowest priority: domain fallback (if exists)
+	healthConfig := &HealthCheckConfig{}
+	domainMapping := parseDomainMapping("", tags)
+	if domainMapping != nil {
+		healthConfig.Type = CheckTypeHTTP
+		healthConfig.Path = "/"
+		healthConfig.Host = domainMapping.Domain
+		healthConfig.Method = HTTPMethodGET
+	}
+
+	// Apply medium priority: Nomad job check (if exists)
+	if nomadCheck != nil {
+		// Override path and method from Nomad, but preserve Host from domain
+		nomadConfig := convertNomadToHAProxyCheck(nomadCheck)
+		if nomadConfig.Path != "" {
+			healthConfig.Path = nomadConfig.Path
+		}
+		if nomadConfig.Method != "" {
+			healthConfig.Method = nomadConfig.Method
+		}
+		if nomadConfig.Type != "" {
+			healthConfig.Type = nomadConfig.Type
+		}
+		// Host is NOT overridden - preserve from domain fallback
+	}
+
+	// Apply highest priority: explicit tags (if exists)
+	hasExplicitTags := false
+	explicitMethod := false
+	explicitType := false
+	hasPath := false
+	for _, tag := range tags {
+		if strings.HasPrefix(tag, "haproxy.check.") {
+			hasExplicitTags = true
 			switch {
 			case strings.HasPrefix(tag, "haproxy.check.disabled"):
 				healthConfig.Disabled = true
 			case strings.HasPrefix(tag, "haproxy.check.path="):
 				healthConfig.Path = strings.TrimPrefix(tag, "haproxy.check.path=")
+				hasPath = true
 			case strings.HasPrefix(tag, "haproxy.check.method="):
 				healthConfig.Method = strings.TrimPrefix(tag, "haproxy.check.method=")
+				explicitMethod = true
 			case strings.HasPrefix(tag, "haproxy.check.host="):
+				// Explicit host override - this IS allowed
 				healthConfig.Host = strings.TrimPrefix(tag, "haproxy.check.host=")
 			case strings.HasPrefix(tag, "haproxy.check.type="):
 				healthConfig.Type = strings.TrimPrefix(tag, "haproxy.check.type=")
+				explicitType = true
 			}
 		}
 	}
 
-	// If no explicit health check tags, check for domain tag
-	if !found {
-		domainMapping := parseDomainMapping("", tags)
-		if domainMapping != nil {
-			// Auto-configure HTTP health check with domain as Host header
-			healthConfig.Type = CheckTypeHTTP
-			healthConfig.Path = "/"
-			healthConfig.Host = domainMapping.Domain
-			healthConfig.Method = HTTPMethodGET
-			return &healthConfig
-		}
+	// If explicit tags specify path, infer HTTP type unless explicitly set otherwise
+	if hasPath && !explicitType {
+		healthConfig.Type = CheckTypeHTTP
+	}
+
+	// If explicit tags override path, reset method to GET unless explicitly set
+	if hasExplicitTags && !explicitMethod && healthConfig.Type == CheckTypeHTTP {
+		healthConfig.Method = HTTPMethodGET
+	}
+
+	// If disabled via explicit tag, return special config
+	if healthConfig.Disabled {
+		healthConfig.Type = CheckTypeDisabled
+		return healthConfig
+	}
+
+	// If no configuration found at all, return nil
+	if healthConfig.Type == "" && healthConfig.Path == "" && domainMapping == nil && !hasExplicitTags {
 		return nil
 	}
 
-	// If disabled, return special config
-	if healthConfig.Disabled {
-		healthConfig.Type = CheckTypeDisabled
-	} else if healthConfig.Type == "" {
-		// If path is specified but no type, assume HTTP
+	// Infer type if not explicitly set
+	if healthConfig.Type == "" {
 		if healthConfig.Path != "" {
 			healthConfig.Type = CheckTypeHTTP
 		} else {
@@ -989,7 +1077,12 @@ func parseHealthCheckFromTags(tags []string) *HealthCheckConfig {
 		}
 	}
 
-	return &healthConfig
+	// Ensure method has default
+	if healthConfig.Method == "" && healthConfig.Type == CheckTypeHTTP {
+		healthConfig.Method = HTTPMethodGET
+	}
+
+	return healthConfig
 }
 
 // HealthCheckConfig represents parsed health check configuration
