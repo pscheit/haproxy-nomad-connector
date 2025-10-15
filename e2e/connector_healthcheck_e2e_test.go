@@ -182,22 +182,35 @@ func TestConnector_HTTPHealthCheckE2E(t *testing.T) {
 	})
 
 	t.Run("6_VerifyHealthChecksActuallyRun", func(t *testing.T) {
-		// Wait for health checks to run
-		t.Log("Waiting 15 seconds for health checks to run...")
-		time.Sleep(15 * time.Second)
+		t.Log("Polling for server to appear in HAProxy runtime stats (waiting for reload)...")
 
-		// Get detailed stats
-		cmd := exec.Command("docker", "exec", "haproxy-test", "sh", "-c",
-			fmt.Sprintf("echo 'show stat' | socat stdio /tmp/haproxy.sock | grep '^%s,' | grep -v BACKEND", backendName))
+		var stats string
+		maxAttempts := 30
+		found := false
 
-		output, err := cmd.Output()
-		if err != nil {
-			t.Fatalf("Failed to get server stats: %v", err)
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			cmd := exec.Command("docker", "exec", "haproxy-test", "sh", "-c",
+				fmt.Sprintf("echo 'show stat' | socat stdio /tmp/haproxy.sock | grep '^%s,' | grep -v BACKEND", backendName))
+
+			output, err := cmd.Output()
+			if err == nil && len(output) > 0 {
+				stats = string(output)
+				found = true
+				t.Logf("✓ Server appeared in stats after %d seconds", attempt)
+				break
+			}
+
+			if attempt%5 == 0 {
+				t.Logf("  Still waiting for HAProxy reload... (%d/%d seconds)", attempt, maxAttempts)
+			}
+			time.Sleep(1 * time.Second)
 		}
 
-		stats := string(output)
-		fields := strings.Split(stats, ",")
+		if !found {
+			t.Fatalf("Server never appeared in HAProxy stats after %d seconds - reload may have failed", maxAttempts)
+		}
 
+		fields := strings.Split(stats, ",")
 		if len(fields) > 35 {
 			checkStatus := fields[35]
 			t.Logf("Check status field: %s", checkStatus)
