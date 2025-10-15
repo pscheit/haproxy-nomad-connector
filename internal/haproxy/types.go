@@ -15,6 +15,7 @@ type APIVersion struct {
 
 type Backend struct {
 	Name            string           `json:"name"`
+	Mode            string           `json:"mode,omitempty"` // "http", "tcp"
 	Balance         Balance          `json:"balance"`
 	From            string           `json:"from,omitempty"`
 	AdvCheck        string           `json:"adv_check,omitempty"`      // "httpchk", "ldap-check", "mysql-check", etc.

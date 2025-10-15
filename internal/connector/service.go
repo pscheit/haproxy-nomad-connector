@@ -341,7 +341,13 @@ func updateBackendHealthChecks(
 	}
 
 	if isHTTPHealthCheckConfigured(healthCheckConfig) {
+		updatedBackend.Mode = CheckTypeHTTP
 		updatedBackend.AdvCheck = AdvCheckHTTP
+		updatedBackend.HTTPCheckParams = &haproxy.HTTPCheckParams{
+			Method:  healthCheckConfig.Method,
+			URI:     healthCheckConfig.Path,
+			Version: "HTTP/1.1",
+		}
 	}
 
 	_, err = client.ReplaceBackend(updatedBackend, version)
@@ -367,6 +373,8 @@ func ensureBackend(client haproxy.ClientInterface, backendName string, version i
 		return newVersion, updateErr
 	}
 
+	healthCheckConfig := parseHealthCheckFromTags(tags)
+
 	backend := haproxy.Backend{
 		Name: backendName,
 		Balance: haproxy.Balance{
@@ -377,10 +385,14 @@ func ensureBackend(client haproxy.ClientInterface, backendName string, version i
 		},
 	}
 
-	healthCheckConfig := parseHealthCheckFromTags(tags)
-
 	if isHTTPHealthCheckConfigured(healthCheckConfig) {
+		backend.Mode = CheckTypeHTTP
 		backend.AdvCheck = AdvCheckHTTP
+		backend.HTTPCheckParams = &haproxy.HTTPCheckParams{
+			Method:  healthCheckConfig.Method,
+			URI:     healthCheckConfig.Path,
+			Version: "HTTP/1.1",
+		}
 	}
 
 	_, err = client.CreateBackend(backend, version)
@@ -759,7 +771,13 @@ func ensureBackendWithHealthCheck(client haproxy.ClientInterface, backendName st
 	}
 
 	if isHTTPHealthCheckConfigured(healthCheckConfig) {
+		backend.Mode = CheckTypeHTTP
 		backend.AdvCheck = AdvCheckHTTP
+		backend.HTTPCheckParams = &haproxy.HTTPCheckParams{
+			Method:  healthCheckConfig.Method,
+			URI:     healthCheckConfig.Path,
+			Version: "HTTP/1.1",
+		}
 	}
 
 	_, err = client.CreateBackend(backend, version)
@@ -884,7 +902,17 @@ func parseHealthCheckFromTags(tags []string) *HealthCheckConfig {
 		}
 	}
 
+	// If no explicit health check tags, check for domain tag
 	if !found {
+		domainMapping := parseDomainMapping("", tags)
+		if domainMapping != nil {
+			// Auto-configure HTTP health check with domain as Host header
+			healthConfig.Type = CheckTypeHTTP
+			healthConfig.Path = "/"
+			healthConfig.Host = domainMapping.Domain
+			healthConfig.Method = HTTPMethodGET
+			return &healthConfig
+		}
 		return nil
 	}
 

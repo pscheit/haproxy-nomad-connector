@@ -110,6 +110,7 @@ func createMisconfiguredBackendForTest(t *testing.T, client *haproxy.Client, bac
 // This is extracted from the config file and runtime state, NOT from the API response
 type ActualBackendConfig struct {
 	Name               string
+	Mode               string   // "http", "tcp", or empty
 	Algorithm          string
 	HealthCheckType    string   // "tcp", "http", or "none"
 	HTTPCheckMethod    string   // "GET", "POST", etc (empty if not HTTP)
@@ -154,6 +155,13 @@ func getActualBackendConfig(t *testing.T, backendName string) ActualBackendConfi
 		}
 
 		// Parse backend configuration lines
+		if strings.HasPrefix(trimmed, "mode ") {
+			parts := strings.Fields(trimmed)
+			if len(parts) >= 2 {
+				config.Mode = parts[1]
+			}
+		}
+
 		if strings.Contains(trimmed, "balance ") {
 			parts := strings.Fields(trimmed)
 			if len(parts) >= 2 {
@@ -220,6 +228,10 @@ func assertBackendConfigEquals(t *testing.T, backendName string, expected Actual
 	actual := getActualBackendConfig(t, backendName)
 
 	t.Logf("Actual config for %s: %+v", backendName, actual)
+
+	if expected.Mode != "" && actual.Mode != expected.Mode {
+		t.Errorf("Mode mismatch: expected=%s, actual=%s", expected.Mode, actual.Mode)
+	}
 
 	if actual.Algorithm != "" && expected.Algorithm != "" && actual.Algorithm != expected.Algorithm {
 		t.Errorf("Algorithm mismatch: expected=%s, actual=%s", expected.Algorithm, actual.Algorithm)
@@ -815,5 +827,90 @@ func TestConnector_HTTPHealthCheckE2E_ExistingMisconfiguredBackend_ProductionPat
 		})
 
 		t.Logf("✓ Backend correctly updated with HTTP health check configuration INCLUDING Host header")
+	})
+}
+
+// TestConnector_DomainTagHTTPHealthCheck_E2E tests creating a new backend with domain tag
+// This reproduces the paperless scenario where:
+// - Service registers with haproxy.domain tag
+// - Connector should create backend with Mode="http", option httpchk, and http-check send hdr Host
+// - This test would have caught the production bug where Mode was missing
+func TestConnector_DomainTagHTTPHealthCheck_E2E(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	client := haproxy.NewClient("http://localhost:5555", "admin", "adminpwd")
+	logger := log.New(os.Stderr, "[test] ", log.LstdFlags)
+
+	cfg := &config.Config{
+		HAProxy: config.HAProxyConfig{
+			Address:         "http://localhost:5555",
+			Username:        "admin",
+			Password:        "adminpwd",
+			BackendStrategy: "create_new",
+			Frontend:        "https",
+		},
+	}
+
+	serviceName := "paperless-test"
+	backendName := "paperless_test"
+
+	cleanup := func() {
+		version, _ := client.GetConfigVersion()
+		_ = client.DeleteBackend(backendName, version)
+	}
+	defer cleanup()
+
+	t.Run("1_RegisterServiceWithDomainTag", func(t *testing.T) {
+		nomadEvent := nomad.ServiceEvent{
+			Type:  "ServiceRegistration",
+			Topic: "Service",
+			Payload: nomad.Payload{
+				Service: &nomad.Service{
+					ServiceName: serviceName,
+					Address:     "192.168.5.13",
+					Port:        8030,
+					JobID:       "",
+					Tags: []string{
+						"haproxy.enable=true",
+						"haproxy.domain=paperless.ps-webforge.net",
+					},
+				},
+			},
+		}
+
+		ctx := context.Background()
+		result, err := connector.ProcessNomadServiceEvent(ctx, client, nil, nomadEvent, logger, cfg)
+		if err != nil {
+			t.Fatalf("ProcessNomadServiceEvent failed: %v", err)
+		}
+
+		resultMap, ok := result.(map[string]string)
+		if !ok {
+			t.Fatalf("Expected result to be map[string]string, got %T", result)
+		}
+
+		t.Logf("✓ Service registered with domain tag")
+		t.Logf("  Status: %s", resultMap["status"])
+		t.Logf("  Backend: %s", resultMap["backend"])
+	})
+
+	t.Run("2_VerifyActualHAProxyConfig", func(t *testing.T) {
+		time.Sleep(2 * time.Second)
+		assertBackendConfigEquals(t, backendName, ActualBackendConfig{
+			Name:               backendName,
+			Mode:               "http",
+			Algorithm:          "roundrobin",
+			HealthCheckType:    "http",
+			HTTPCheckMethod:    "GET",
+			HTTPCheckPath:      "/",
+			HTTPCheckHost:      "paperless.ps-webforge.net",
+			DefaultServerCheck: true,
+		})
+
+		t.Logf("✓ HAProxy config has complete HTTP health check configuration")
+		t.Logf("  This test reproduces the paperless scenario")
+		t.Logf("  It verifies that domain tags trigger full HTTP health check setup")
 	})
 }
