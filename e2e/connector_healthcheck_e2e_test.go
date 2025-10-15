@@ -165,8 +165,30 @@ func TestConnector_HTTPHealthCheckE2E(t *testing.T) {
 	})
 
 	t.Run("5_VerifyHealthCheckEnabled", func(t *testing.T) {
-		// Wait for HAProxy to reload and apply configuration
-		time.Sleep(2 * time.Second)
+		// Capture HAProxy worker PID before reload
+		beforeCmd := exec.Command("docker", "exec", "haproxy-test", "sh", "-c",
+			"ps aux | grep 'haproxy.*-sf' | grep -v grep | awk '{print $1}'")
+		beforeOutput, _ := beforeCmd.Output()
+		beforePID := strings.TrimSpace(string(beforeOutput))
+		t.Logf("HAProxy worker PID before reload: %s", beforePID)
+
+		//Wait for DataPlane API reload-delay (5 seconds) plus buffer
+		t.Log("Waiting for DataPlane API to trigger HAProxy reload (reload-delay=5s)...")
+		time.Sleep(7 * time.Second)
+
+		// Check if HAProxy reloaded by comparing worker PID
+		afterCmd := exec.Command("docker", "exec", "haproxy-test", "sh", "-c",
+			"ps aux | grep 'haproxy.*-sf' | grep -v grep | awk '{print $1}'")
+		afterOutput, _ := afterCmd.Output()
+		afterPID := strings.TrimSpace(string(afterOutput))
+		t.Logf("HAProxy worker PID after reload: %s", afterPID)
+
+		if beforePID == afterPID && beforePID != "" {
+			t.Errorf("⚠️  HAProxy did NOT reload - worker PID unchanged (%s)", beforePID)
+			t.Error("   This explains why server doesn't appear in runtime stats!")
+		} else if afterPID != "" {
+			t.Logf("✓ HAProxy reloaded successfully (PID changed: %s → %s)", beforePID, afterPID)
+		}
 
 		// Verify server exists and health checks are configured
 		servers, err := client.GetServers(backendName)
@@ -190,13 +212,13 @@ func TestConnector_HTTPHealthCheckE2E(t *testing.T) {
 
 		for attempt := 1; attempt <= maxAttempts; attempt++ {
 			cmd := exec.Command("docker", "exec", "haproxy-test", "sh", "-c",
-				fmt.Sprintf("echo 'show stat' | socat stdio /tmp/haproxy.sock | grep '^%s,' | grep -v BACKEND", backendName))
+				fmt.Sprintf("echo 'show stat' | socat stdio /tmp/haproxy.sock | grep '%s,'", backendName))
 
 			output, err := cmd.Output()
 			if err == nil && len(output) > 0 {
 				stats = string(output)
 				found = true
-				t.Logf("✓ Server appeared in stats after %d seconds", attempt)
+				t.Logf("✓ Backend appeared in stats after %d seconds", attempt)
 				break
 			}
 
@@ -207,7 +229,27 @@ func TestConnector_HTTPHealthCheckE2E(t *testing.T) {
 		}
 
 		if !found {
-			t.Fatalf("Server never appeared in HAProxy stats after %d seconds - reload may have failed", maxAttempts)
+			t.Error("Server never appeared in HAProxy stats after 30 seconds")
+			t.Log("DEBUG: Dumping diagnostic information...")
+
+			// Show all backends in stats
+			allStatsCmd := exec.Command("docker", "exec", "haproxy-test", "sh", "-c",
+				"echo 'show stat' | socat stdio /tmp/haproxy.sock | grep ',BACKEND,' | head -20")
+			allStatsOutput, _ := allStatsCmd.Output()
+			t.Logf("DEBUG: All backends in runtime stats:\n%s", string(allStatsOutput))
+
+			// Check if our backend exists in config
+			configCmd := exec.Command("docker", "exec", "haproxy-test", "sh", "-c",
+				fmt.Sprintf("grep -A 5 'backend %s' /usr/local/etc/haproxy/haproxy.cfg || echo 'Backend not in config'", backendName))
+			configOutput, _ := configCmd.Output()
+			t.Logf("DEBUG: Backend in config file:\n%s", string(configOutput))
+
+			// Check DataPlane API state
+			pidCmd := exec.Command("docker", "exec", "haproxy-test", "ps", "aux")
+			pidOutput, _ := pidCmd.Output()
+			t.Logf("DEBUG: Process list:\n%s", string(pidOutput))
+
+			t.Fatalf("Server never appeared in HAProxy stats - see debug output above")
 		}
 
 		fields := strings.Split(stats, ",")
