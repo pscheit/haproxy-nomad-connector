@@ -106,6 +106,154 @@ func createMisconfiguredBackendForTest(t *testing.T, client *haproxy.Client, bac
 	t.Logf("  DefaultServer: %v (nil = no default-server check)", backend.DefaultServer)
 }
 
+// ActualBackendConfig represents the actual configuration HAProxy is using
+// This is extracted from the config file and runtime state, NOT from the API response
+type ActualBackendConfig struct {
+	Name               string
+	Algorithm          string
+	HealthCheckType    string   // "tcp", "http", or "none"
+	HTTPCheckMethod    string   // "GET", "POST", etc (empty if not HTTP)
+	HTTPCheckPath      string   // "/health", "/healthcheck", etc (empty if not HTTP)
+	HTTPCheckHost      string   // Host header value for HTTP checks (empty if not specified)
+	DefaultServerCheck bool     // true if "default-server check" is present
+	Servers            []string // List of server names
+}
+
+// getActualBackendConfig extracts the ACTUAL backend configuration from HAProxy
+// This reads the config file and parses it to see what HAProxy will actually do
+func getActualBackendConfig(t *testing.T, backendName string) ActualBackendConfig {
+	t.Helper()
+
+	config := ActualBackendConfig{
+		Name:            backendName,
+		HealthCheckType: "none",
+	}
+
+	// Read the actual HAProxy config file
+	configContent := getHAProxyConfig(t)
+	lines := strings.Split(configContent, "\n")
+
+	// Find the backend section
+	inBackend := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		// Check if we're entering our backend
+		if strings.HasPrefix(trimmed, "backend "+backendName) {
+			inBackend = true
+			continue
+		}
+
+		// Check if we've left the backend (next backend or frontend section)
+		if inBackend && (strings.HasPrefix(trimmed, "backend ") || strings.HasPrefix(trimmed, "frontend ") || strings.HasPrefix(trimmed, "listen ")) {
+			break
+		}
+
+		if !inBackend {
+			continue
+		}
+
+		// Parse backend configuration lines
+		if strings.Contains(trimmed, "balance ") {
+			parts := strings.Fields(trimmed)
+			if len(parts) >= 2 {
+				config.Algorithm = parts[1]
+			}
+		}
+
+		if strings.Contains(trimmed, "option httpchk") {
+			config.HealthCheckType = "http"
+			// Parse: option httpchk GET /health HTTP/1.1
+			parts := strings.Fields(trimmed)
+			if len(parts) >= 3 {
+				config.HTTPCheckMethod = parts[2]
+			}
+			if len(parts) >= 4 {
+				config.HTTPCheckPath = parts[3]
+			}
+		}
+
+		if strings.Contains(trimmed, "http-check send hdr Host") {
+			// Parse: http-check send hdr Host example.com
+			parts := strings.Fields(trimmed)
+			if len(parts) >= 5 {
+				config.HTTPCheckHost = parts[4]
+			}
+		}
+
+		if strings.Contains(trimmed, "default-server") && strings.Contains(trimmed, "check") {
+			config.DefaultServerCheck = true
+		}
+
+		if strings.HasPrefix(trimmed, "server ") {
+			parts := strings.Fields(trimmed)
+			if len(parts) >= 2 {
+				config.Servers = append(config.Servers, parts[1])
+			}
+		}
+
+		// Check next line for http-check after option httpchk
+		if strings.Contains(trimmed, "option httpchk") && i+1 < len(lines) {
+			nextLine := strings.TrimSpace(lines[i+1])
+			if strings.Contains(nextLine, "http-check send hdr Host") {
+				parts := strings.Fields(nextLine)
+				if len(parts) >= 5 {
+					config.HTTPCheckHost = parts[4]
+				}
+			}
+		}
+	}
+
+	// If no http check but default-server check, it's TCP
+	if config.HealthCheckType == "none" && config.DefaultServerCheck {
+		config.HealthCheckType = "tcp"
+	}
+
+	return config
+}
+
+// assertBackendConfigEquals fetches the actual backend config and compares it to expected
+// This provides clear error messages about what's missing or incorrect
+// By fetching the actual config internally, callers can't accidentally pass the wrong backend
+func assertBackendConfigEquals(t *testing.T, backendName string, expected ActualBackendConfig) {
+	t.Helper()
+
+	// Fetch the actual config - this ensures we're comparing the right backend
+	actual := getActualBackendConfig(t, backendName)
+
+	t.Logf("Actual config for %s: %+v", backendName, actual)
+
+	if actual.Algorithm != "" && expected.Algorithm != "" && actual.Algorithm != expected.Algorithm {
+		t.Errorf("Algorithm mismatch: expected=%s, actual=%s", expected.Algorithm, actual.Algorithm)
+	}
+
+	if expected.HealthCheckType != actual.HealthCheckType {
+		t.Errorf("HealthCheckType mismatch: expected=%s, actual=%s", expected.HealthCheckType, actual.HealthCheckType)
+	}
+
+	if expected.HTTPCheckMethod != "" && actual.HTTPCheckMethod != expected.HTTPCheckMethod {
+		t.Errorf("HTTPCheckMethod mismatch: expected=%s, actual=%s", expected.HTTPCheckMethod, actual.HTTPCheckMethod)
+	}
+
+	if expected.HTTPCheckPath != "" && actual.HTTPCheckPath != expected.HTTPCheckPath {
+		t.Errorf("HTTPCheckPath mismatch: expected=%s, actual=%s", expected.HTTPCheckPath, actual.HTTPCheckPath)
+	}
+
+	if expected.HTTPCheckHost != "" && actual.HTTPCheckHost != expected.HTTPCheckHost {
+		t.Errorf("HTTPCheckHost mismatch: expected=%s, actual=%s", expected.HTTPCheckHost, actual.HTTPCheckHost)
+		t.Error("  ⚠️  CRITICAL: Missing Host header will cause health checks to fail with 400 Bad Request!")
+		t.Error("  This is the production bug that caused the outage!")
+	}
+
+	if expected.DefaultServerCheck != actual.DefaultServerCheck {
+		t.Errorf("DefaultServerCheck mismatch: expected=%v, actual=%v", expected.DefaultServerCheck, actual.DefaultServerCheck)
+	}
+
+	if len(expected.Servers) > 0 && len(actual.Servers) != len(expected.Servers) {
+		t.Errorf("Server count mismatch: expected=%d, actual=%d", len(expected.Servers), len(actual.Servers))
+	}
+}
+
 // TestConnector_HTTPHealthCheckE2E tests the complete connector flow with HTTP health checks
 // This is a TRUE end-to-end test that:
 // 1. Simulates a Nomad service registration event with health check tags
@@ -196,23 +344,18 @@ func TestConnector_HTTPHealthCheckE2E(t *testing.T) {
 		t.Logf("  URI: %s", backend.HTTPCheckParams.URI)
 	})
 
-	t.Run("3_VerifyHAProxyConfig", func(t *testing.T) {
-		configContent := getHAProxyConfig(t)
+	t.Run("3_VerifyActualHAProxyConfig", func(t *testing.T) {
+		assertBackendConfigEquals(t, backendName, ActualBackendConfig{
+			Name:               backendName,
+			Algorithm:          "roundrobin",
+			HealthCheckType:    "http",
+			HTTPCheckMethod:    "GET",
+			HTTPCheckPath:      "/health",
+			HTTPCheckHost:      "test-e2e.local",
+			DefaultServerCheck: true,
+		})
 
-		if !strings.Contains(configContent, fmt.Sprintf("backend %s", backendName)) {
-			t.Error("Backend not found in HAProxy config")
-		}
-
-		if !strings.Contains(configContent, "option httpchk") {
-			t.Error("'option httpchk' not found in HAProxy config - connector did not create backend correctly!")
-		}
-
-		hasHTTPCheckPath := strings.Contains(configContent, "/health")
-		if !hasHTTPCheckPath {
-			t.Error("Health check path '/health' not found in HAProxy config")
-		}
-
-		t.Logf("✓ HAProxy config contains correct HTTP health check")
+		t.Logf("✓ HAProxy config contains correct HTTP health check with Host header")
 	})
 
 	t.Run("4_VerifyServerAdded", func(t *testing.T) {
@@ -479,29 +622,20 @@ func TestConnector_HTTPHealthCheckE2E_ExistingMisconfiguredBackend(t *testing.T)
 		t.Logf("✓ HAProxy socket verification attempted")
 	})
 
-	t.Run("5_VerifyHAProxyConfigUpdated", func(t *testing.T) {
+	t.Run("5_VerifyActualHAProxyConfigUpdated", func(t *testing.T) {
 		time.Sleep(2 * time.Second)
 
-		configContent := getHAProxyConfig(t)
+		assertBackendConfigEquals(t, backendName, ActualBackendConfig{
+			Name:               backendName,
+			Algorithm:          "roundrobin",
+			HealthCheckType:    "http",
+			HTTPCheckMethod:    "GET",
+			HTTPCheckPath:      "/health",
+			HTTPCheckHost:      "test-misconfigured.local",
+			DefaultServerCheck: true,
+		})
 
-		if !strings.Contains(configContent, fmt.Sprintf("backend %s", backendName)) {
-			t.Error("BUG (HAProxy Config): Backend not found in HAProxy config")
-		}
-
-		if !strings.Contains(configContent, "option httpchk") {
-			t.Error("BUG (HAProxy Config): 'option httpchk' not found in HAProxy config after update!")
-		}
-
-		hasHTTPCheckPath := strings.Contains(configContent, "/health")
-		if !hasHTTPCheckPath {
-			t.Error("BUG (HAProxy Config): Health check path '/health' not found in config!")
-		}
-
-		if !strings.Contains(configContent, "default-server check") {
-			t.Error("BUG (HAProxy Config): 'default-server check' not found in HAProxy config after update!")
-		}
-
-		t.Logf("✓ HAProxy config file contains health check directives")
+		t.Logf("✓ HAProxy config file contains health check directives with Host header")
 	})
 
 	t.Run("6_VerifyHealthChecksActuallyWork", func(t *testing.T) {
@@ -637,6 +771,17 @@ func TestConnector_HTTPHealthCheckE2E_ExistingMisconfiguredBackend_ProductionPat
 			t.Errorf("REGRESSION: Backend missing 'default-server check=%s'", connector.CheckEnabled)
 		}
 
-		t.Logf("✓ Backend correctly updated with HTTP health check configuration")
+		// Verify ACTUAL config file has Host header (would have caught the production bug)
+		assertBackendConfigEquals(t, backendName, ActualBackendConfig{
+			Name:               backendName,
+			Algorithm:          "roundrobin",
+			HealthCheckType:    "http",
+			HTTPCheckMethod:    "GET",
+			HTTPCheckPath:      "/healthcheck",
+			HTTPCheckHost:      "test-prod.local",
+			DefaultServerCheck: true,
+		})
+
+		t.Logf("✓ Backend correctly updated with HTTP health check configuration INCLUDING Host header")
 	})
 }
