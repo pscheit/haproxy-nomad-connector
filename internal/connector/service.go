@@ -260,6 +260,8 @@ func handleServiceRegistration(
 }
 
 // ensureBackend ensures the backend exists and is compatible
+//
+//nolint:gocyclo,goconst // Complexity justified by health check detection and update logic
 func ensureBackend(client haproxy.ClientInterface, backendName string, version int, tags []string) (int, error) {
 	existingBackend, err := client.GetBackend(backendName)
 	if err == nil {
@@ -267,6 +269,58 @@ func ensureBackend(client haproxy.ClientInterface, backendName string, version i
 			return version, fmt.Errorf("backend %s already exists with incompatible configuration (algorithm: %s, expected: roundrobin)",
 				backendName, existingBackend.Balance.Algorithm)
 		}
+
+		// Check if existing backend is missing health check configuration
+		healthCheckConfig := parseHealthCheckFromTags(tags)
+		needsUpdate := false
+
+		// Check if DefaultServer is missing or doesn't have check enabled
+		if existingBackend.DefaultServer == nil || existingBackend.DefaultServer.Check != "enabled" {
+			needsUpdate = true
+		}
+
+		// Check if HTTP health checks are specified but missing
+		if healthCheckConfig != nil && healthCheckConfig.Type == CheckTypeHTTP && healthCheckConfig.Path != "" {
+			if existingBackend.AdvCheck != "httpchk" || existingBackend.HTTPCheckParams == nil {
+				needsUpdate = true
+			}
+		}
+
+		// If backend needs updating, replace it with correct configuration
+		if needsUpdate {
+			updatedBackend := &haproxy.Backend{
+				Name: backendName,
+				Balance: haproxy.Balance{
+					Algorithm: "roundrobin",
+				},
+				DefaultServer: &haproxy.Server{
+					Check: "enabled",
+				},
+			}
+
+			// Configure HTTP health checks at backend level if specified
+			if healthCheckConfig != nil && healthCheckConfig.Type == CheckTypeHTTP && healthCheckConfig.Path != "" {
+				updatedBackend.AdvCheck = "httpchk"
+				updatedBackend.HTTPCheckParams = &haproxy.HTTPCheckParams{
+					Method: healthCheckConfig.Method,
+					URI:    healthCheckConfig.Path,
+					Host:   healthCheckConfig.Host,
+				}
+
+				// Default to GET if no method specified
+				if updatedBackend.HTTPCheckParams.Method == "" {
+					updatedBackend.HTTPCheckParams.Method = HTTPMethodGET
+				}
+			}
+
+			_, err = client.ReplaceBackend(updatedBackend, version)
+			if err != nil {
+				return version, fmt.Errorf("failed to update backend %s with health check configuration: %w", backendName, err)
+			}
+
+			return client.GetConfigVersion()
+		}
+
 		return version, nil
 	}
 

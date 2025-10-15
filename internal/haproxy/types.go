@@ -134,6 +134,7 @@ type ClientInterface interface {
 	GetConfigVersion() (int, error)
 	GetBackend(name string) (*Backend, error)
 	CreateBackend(backend Backend, version int) (*Backend, error)
+	ReplaceBackend(backend *Backend, version int) (*Backend, error)
 	GetServers(backendName string) ([]Server, error)
 	CreateServer(backendName string, server *Server, version int) (*Server, error)
 	DeleteServer(backendName, serverName string, version int) error

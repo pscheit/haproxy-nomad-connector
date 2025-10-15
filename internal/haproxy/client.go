@@ -104,6 +104,14 @@ func (c *Client) DeleteBackend(name string, version int) error {
 	return c.makeRequest(HTTPMethodDELETE, path, nil, nil, version)
 }
 
+// ReplaceBackend updates an existing backend configuration
+func (c *Client) ReplaceBackend(backend *Backend, version int) (*Backend, error) {
+	var updated Backend
+	path := fmt.Sprintf("/v3/services/haproxy/configuration/backends/%s", backend.Name)
+	err := c.makeRequest(HTTPMethodPUT, path, backend, &updated, version)
+	return &updated, err
+}
+
 // CreateServer adds a server to a backend
 func (c *Client) CreateServer(backendName string, server *Server, version int) (*Server, error) {
 	var created Server

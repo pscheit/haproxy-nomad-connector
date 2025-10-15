@@ -51,6 +51,12 @@ func (m *MockHAProxyClient) CreateBackend(backend haproxy.Backend, version int) 
 	return &backend, nil
 }
 
+func (m *MockHAProxyClient) ReplaceBackend(backend *haproxy.Backend, version int) (*haproxy.Backend, error) {
+	m.backends[backend.Name] = backend
+	m.version++
+	return backend, nil
+}
+
 func (m *MockHAProxyClient) GetServers(backendName string) ([]haproxy.Server, error) {
 	servers, exists := m.servers[backendName]
 	if !exists {

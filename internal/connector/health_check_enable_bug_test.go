@@ -56,6 +56,14 @@ func (m *mockHAProxyClientWithBackendTracking) CreateBackend(backend haproxy.Bac
 	return &backend, nil
 }
 
+func (m *mockHAProxyClientWithBackendTracking) ReplaceBackend(backend *haproxy.Backend, version int) (*haproxy.Backend, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.backendCreated = true
+	m.createdBackend = *backend
+	return backend, nil
+}
+
 // TestHealthCheckEnabledAfterServerCreation verifies the fix for Bug #1
 // where servers are properly configured with health checks via default_server in HAProxy 3.0
 func TestHealthCheckEnabledAfterServerCreation(t *testing.T) {
