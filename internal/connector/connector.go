@@ -150,6 +150,7 @@ func (c *Connector) processNomadServiceEventWithConfig(ctx context.Context, even
 }
 
 // syncExistingServices performs initial sync of all registered Nomad services
+// and cleans up stale servers that no longer exist in Nomad
 func (c *Connector) syncExistingServices(ctx context.Context) error {
 	c.logger.Println("Performing initial sync of existing services...")
 
@@ -157,6 +158,10 @@ func (c *Connector) syncExistingServices(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to get existing services: %w", err)
 	}
+
+	// Build a map of backend -> expected server names from Nomad
+	// This allows us to identify stale servers after syncing
+	expectedServersByBackend := buildExpectedServersMap(services)
 
 	synced := 0
 	for _, svc := range services {
@@ -178,8 +183,141 @@ func (c *Connector) syncExistingServices(ctx context.Context) error {
 		}
 	}
 
-	c.logger.Printf("Initial sync complete: %d services synced", synced)
+	// Clean up stale servers from HAProxy that no longer exist in Nomad
+	removed, cleanupErr := c.cleanupStaleServers(expectedServersByBackend)
+	if cleanupErr != nil {
+		c.logger.Printf("Warning: Error during stale server cleanup: %v", cleanupErr)
+	}
+
+	c.logger.Printf("Initial sync complete: %d services synced, %d stale servers removed", synced, removed)
 	return nil
+}
+
+// buildExpectedServersMap creates a map of backend name -> set of expected server names
+// based on current Nomad service instances
+func buildExpectedServersMap(services []*nomad.Service) map[string]map[string]bool {
+	result := make(map[string]map[string]bool)
+
+	for _, svc := range services {
+		// Only process services that are managed by the connector
+		if !hasTag(svc.Tags, "haproxy.enable=true") {
+			continue
+		}
+
+		backendName := sanitizeServiceName(svc.ServiceName)
+		serverName := generateServerName(svc.ServiceName, svc.Address, svc.Port)
+
+		if result[backendName] == nil {
+			result[backendName] = make(map[string]bool)
+		}
+		result[backendName][serverName] = true
+	}
+
+	return result
+}
+
+// cleanupStaleServers removes servers from HAProxy backends that are not in the expected set
+// Returns the number of servers removed and any error encountered
+func (c *Connector) cleanupStaleServers(expectedServersByBackend map[string]map[string]bool) (int, error) {
+	return cleanupStaleServersFromBackends(c.haproxyClient, expectedServersByBackend, c.logger)
+}
+
+// SyncAndCleanupStaleServers performs a full sync cycle: registers current Nomad services
+// and removes stale servers from HAProxy that no longer exist in Nomad.
+// This is exported for testing purposes.
+func SyncAndCleanupStaleServers(
+	ctx context.Context,
+	haproxyClient haproxy.ClientInterface,
+	nomadClient nomad.NomadClient,
+	logger *log.Logger,
+	cfg *config.Config,
+) (synced, removed int, err error) {
+	logger.Println("Performing sync and cleanup of services...")
+
+	services, err := nomadClient.GetServices()
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to get existing services: %w", err)
+	}
+
+	// Build a map of backend -> expected server names from Nomad
+	expectedServersByBackend := buildExpectedServersMap(services)
+
+	// Sync all services from Nomad
+	for _, svc := range services {
+		event := nomad.ServiceEvent{
+			Type:  "ServiceRegistration",
+			Topic: "Service",
+			Payload: nomad.Payload{
+				Service: svc,
+			},
+		}
+
+		if result, procErr := ProcessNomadServiceEvent(ctx, haproxyClient, nomadClient, event, logger, cfg); procErr != nil {
+			logger.Printf("Failed to sync service %s: %v", svc.ServiceName, procErr)
+		} else {
+			if resultMap, ok := result.(map[string]string); ok && resultMap["status"] == StatusCreated {
+				synced++
+			}
+		}
+	}
+
+	// Clean up stale servers
+	removed, cleanupErr := cleanupStaleServersFromBackends(haproxyClient, expectedServersByBackend, logger)
+	if cleanupErr != nil {
+		logger.Printf("Warning: Error during stale server cleanup: %v", cleanupErr)
+	}
+
+	logger.Printf("Sync complete: %d services synced, %d stale servers removed", synced, removed)
+	return synced, removed, cleanupErr
+}
+
+// cleanupStaleServersFromBackends removes servers from HAProxy backends that are not in the expected set
+// This is a standalone function that can be used by both the Connector method and the exported function
+func cleanupStaleServersFromBackends(
+	haproxyClient haproxy.ClientInterface,
+	expectedServersByBackend map[string]map[string]bool,
+	logger *log.Logger,
+) (int, error) {
+	removed := 0
+	var lastErr error
+
+	for backendName, expectedServers := range expectedServersByBackend {
+		// Get current servers in HAProxy for this backend
+		haproxyServers, err := haproxyClient.GetServers(backendName)
+		if err != nil {
+			// Backend might not exist yet, skip
+			logger.Printf("Could not get servers for backend %s: %v", backendName, err)
+			continue
+		}
+
+		// Find and remove stale servers
+		for _, server := range haproxyServers {
+			if expectedServers[server.Name] {
+				// Server exists in Nomad, keep it
+				continue
+			}
+
+			// This server is in HAProxy but not in Nomad - it's stale
+			logger.Printf("Removing stale server %s from backend %s", server.Name, backendName)
+
+			version, err := haproxyClient.GetConfigVersion()
+			if err != nil {
+				logger.Printf("Failed to get config version for stale server removal: %v", err)
+				lastErr = err
+				continue
+			}
+
+			if err := haproxyClient.DeleteServer(backendName, server.Name, version); err != nil {
+				logger.Printf("Failed to remove stale server %s: %v", server.Name, err)
+				lastErr = err
+				continue
+			}
+
+			removed++
+		}
+	}
+
+	return removed, lastErr
 }
 
 // processEvent handles individual Nomad service events

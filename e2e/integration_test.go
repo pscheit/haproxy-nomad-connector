@@ -5,6 +5,8 @@ package e2e
 
 import (
 	"context"
+	"log"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/pscheit/haproxy-nomad-connector/internal/config"
 	"github.com/pscheit/haproxy-nomad-connector/internal/connector"
 	"github.com/pscheit/haproxy-nomad-connector/internal/haproxy"
+	"github.com/pscheit/haproxy-nomad-connector/internal/nomad"
 )
 
 // TestDataPlaneAPI_RealConnection tests against actual running Data Plane API
@@ -558,6 +561,161 @@ func TestE2E_ServiceLifecycle(t *testing.T) {
 			}
 		} else {
 			t.Logf("✅ Production bug is FIXED - frontend rule created despite existing server")
+		}
+	})
+
+	// Test for stale server cleanup during syncExistingServices
+	// This reproduces the bug where connector restart leaves orphaned servers in HAProxy
+	// See ISSUE-stale-server-cleanup.md for details
+	t.Run("StaleServerCleanup_OnConnectorSync", func(t *testing.T) {
+		client := haproxy.NewClient("http://localhost:5555", "admin", "adminpwd")
+		logger := log.New(os.Stdout, "[stale-cleanup-test] ", log.LstdFlags)
+
+		cfg := &config.Config{
+			HAProxy: config.HAProxyConfig{
+				Frontend:        "https",
+				BackendStrategy: "create_new",
+			},
+		}
+
+		testBackendName := "stale_cleanup_test"
+		testDomain := "stale-cleanup.test.local"
+
+		// Cleanup
+		defer func() {
+			version, _ := client.GetConfigVersion()
+			client.DeleteBackend(testBackendName, version)
+			client.RemoveFrontendRule("https", testDomain)
+		}()
+
+		// Step 1: Register 3 servers via ServiceRegistration events (simulating normal operation)
+		t.Log("Step 1: Register 3 servers via Nomad events (A, B, C)")
+
+		servers := []struct {
+			address string
+			port    int
+		}{
+			{"192.168.1.10", 8080}, // Server A - will remain
+			{"192.168.1.20", 8080}, // Server B - will become stale
+			{"192.168.1.30", 8080}, // Server C - will become stale
+		}
+
+		for i, srv := range servers {
+			event := connector.ServiceEvent{
+				Type: "ServiceRegistration",
+				Service: connector.Service{
+					ServiceName: "stale-cleanup-test",
+					Address:     srv.address,
+					Port:        srv.port,
+					Tags: []string{
+						"haproxy.enable=true",
+						"haproxy.backend=dynamic",
+						"haproxy.domain=" + testDomain,
+					},
+				},
+			}
+
+			result, err := connector.ProcessServiceEvent(ctx, client, &event, cfg)
+			if err != nil {
+				t.Fatalf("Failed to register server %d: %v", i+1, err)
+			}
+			t.Logf("  Registered server %d (%s:%d): %+v", i+1, srv.address, srv.port, result)
+		}
+
+		// Step 2: Verify all 3 servers exist in HAProxy
+		t.Log("Step 2: Verify all 3 servers exist in HAProxy backend")
+
+		haproxyServers, err := client.GetServers(testBackendName)
+		if err != nil {
+			t.Fatalf("Failed to get servers: %v", err)
+		}
+
+		if len(haproxyServers) != 3 {
+			t.Fatalf("Expected 3 servers in HAProxy, got %d", len(haproxyServers))
+		}
+		t.Logf("  HAProxy has %d servers:", len(haproxyServers))
+		for _, s := range haproxyServers {
+			t.Logf("    - %s (%s:%d)", s.Name, s.Address, s.Port)
+		}
+
+		// Step 3: Simulate connector restart - Nomad now only reports server A
+		// This is the key: Nomad's state changed while connector was "down"
+		t.Log("Step 3: Simulate connector restart - Nomad only reports server A")
+
+		mockNomad := NewMockNomadClient()
+		// Only server A exists in Nomad now (B and C were removed during "downtime")
+		mockNomad.ServicesByName["stale-cleanup-test"] = []*nomad.Service{
+			{
+				ServiceName: "stale-cleanup-test",
+				Address:     "192.168.1.10", // Only server A
+				Port:        8080,
+				Tags: []string{
+					"haproxy.enable=true",
+					"haproxy.backend=dynamic",
+					"haproxy.domain=" + testDomain,
+				},
+			},
+		}
+
+		t.Logf("  Mock Nomad configured with only 1 service instance")
+
+		// Step 4: Call SyncAndCleanupStaleServers (the function that should clean up stale servers)
+		t.Log("Step 4: Run SyncAndCleanupStaleServers (should clean up stale servers B and C)")
+
+		synced, removed, err := connector.SyncAndCleanupStaleServers(ctx, client, mockNomad, logger, cfg)
+		if err != nil {
+			t.Logf("  Warning: sync error (may be expected): %v", err)
+		}
+		t.Logf("  Sync result: %d synced, %d removed", synced, removed)
+
+		// Step 5: THE BUG TEST - Check if stale servers B and C were removed
+		t.Log("Step 5: Verify stale servers B and C were removed")
+
+		haproxyServers, err = client.GetServers(testBackendName)
+		if err != nil {
+			t.Fatalf("Failed to get servers after sync: %v", err)
+		}
+
+		t.Logf("  HAProxy now has %d servers:", len(haproxyServers))
+		for _, s := range haproxyServers {
+			t.Logf("    - %s (%s:%d)", s.Name, s.Address, s.Port)
+		}
+
+		// Expected: only server A should remain
+		if len(haproxyServers) != 1 {
+			t.Errorf("❌ BUG REPRODUCED: Expected 1 server after sync, got %d", len(haproxyServers))
+			t.Errorf("   Stale servers were NOT cleaned up!")
+			t.Errorf("   This is the exact bug described in ISSUE-stale-server-cleanup.md")
+
+			// Identify which servers are stale
+			for _, s := range haproxyServers {
+				if s.Address != "192.168.1.10" {
+					t.Errorf("   STALE: %s (%s:%d) - should have been removed", s.Name, s.Address, s.Port)
+				}
+			}
+		} else {
+			// Verify it's the correct server
+			if haproxyServers[0].Address != "192.168.1.10" {
+				t.Errorf("❌ Wrong server remained! Expected 192.168.1.10, got %s", haproxyServers[0].Address)
+			} else {
+				t.Logf("✅ Stale servers cleaned up correctly - only server A (192.168.1.10) remains")
+			}
+		}
+
+		// Step 6: Verify server A is still functional
+		t.Log("Step 6: Verify server A is still present and functional")
+
+		serverAExists := false
+		for _, s := range haproxyServers {
+			if s.Address == "192.168.1.10" && s.Port == 8080 {
+				serverAExists = true
+				t.Logf("  ✅ Server A still exists: %s", s.Name)
+				break
+			}
+		}
+
+		if !serverAExists {
+			t.Errorf("❌ Server A was incorrectly removed! The sync removed too much.")
 		}
 	})
 

@@ -1154,6 +1154,16 @@ func sanitizeServiceName(name string) string {
 	return strings.ReplaceAll(name, "-", "_")
 }
 
+// hasTag checks if a tag slice contains a specific tag
+func hasTag(tags []string, tag string) bool {
+	for _, t := range tags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
+}
+
 // generateServerName creates a unique server name based on service, address, and port
 func generateServerName(serviceName, address string, port int) string {
 	// Create deterministic server name: servicename_address_port
