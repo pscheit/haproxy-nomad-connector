@@ -184,35 +184,67 @@ jobs:
       run: |
         docker compose -f docker-compose.dev.yml up -d
         echo "Waiting for HAProxy services to start..."
-        
+
+        # Check container is running
+        echo "Checking container status..."
+        docker ps -a
+
+        # Check if container started successfully
+        if ! docker ps | grep -q haproxy-test; then
+          echo "❌ FATAL: haproxy-test container is not running"
+          echo "=== Container status ==="
+          docker ps -a
+          echo "=== HAProxy Container Logs ==="
+          docker logs haproxy-test 2>&1 || echo "No logs available"
+          exit 1
+        fi
+
         # Wait for HAProxy DataPlane API to be ready
         echo "Waiting for DataPlane API on port 5555..."
+        DATAPLANE_READY=false
         for i in {1..30}; do
           if curl -s -u admin:adminpwd http://localhost:5555/v3/info > /dev/null 2>&1; then
             echo "✓ DataPlane API is ready"
+            DATAPLANE_READY=true
             break
           fi
           echo "  Attempt $i/30: DataPlane API not ready yet..."
           sleep 2
         done
-        
+
+        if [ "$DATAPLANE_READY" = "false" ]; then
+          echo "❌ FATAL: DataPlane API failed to start after 60 seconds"
+          echo "=== HAProxy Container Logs ==="
+          docker logs haproxy-test
+          exit 1
+        fi
+
         # Also wait for HAProxy stats port to be ready
         echo "Waiting for HAProxy stats on port 8099..."
+        STATS_READY=false
         for i in {1..30}; do
           if nc -z localhost 8099 2>/dev/null; then
             echo "✓ HAProxy stats port is ready"
+            STATS_READY=true
             break
           fi
           echo "  Attempt $i/30: Stats port not ready yet..."
           sleep 1
         done
-        
+
+        if [ "$STATS_READY" = "false" ]; then
+          echo "❌ FATAL: HAProxy stats port failed to start after 30 seconds"
+          echo "=== HAProxy Container Logs ==="
+          docker logs haproxy-test
+          exit 1
+        fi
+
         # Give it a bit more time to fully initialize
         echo "Waiting 5 more seconds for complete initialization..."
         sleep 5
-        
+
         echo "✅ HAProxy test environment ready"
-        
+
         # Show container status for debugging
         docker ps
         docker logs haproxy-test --tail 20
