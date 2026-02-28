@@ -72,7 +72,10 @@ func New(cfg *config.Config) (*Connector, error) {
 }
 
 // NewForTesting creates a connector with injected dependencies for testing.
-func NewForTesting(cfg *config.Config, nomadClient nomad.NomadClient, haproxyClient haproxy.ClientInterface, logger *log.Logger) *Connector {
+func NewForTesting(
+	cfg *config.Config, nomadClient nomad.NomadClient,
+	haproxyClient haproxy.ClientInterface, logger *log.Logger,
+) *Connector {
 	return &Connector{
 		config:        cfg,
 		nomadClient:   nomadClient,
@@ -133,7 +136,7 @@ func (c *Connector) Start(ctx context.Context) error {
 			}
 
 		case <-cleanupChan:
-			c.periodicCleanup(ctx)
+			c.periodicCleanup()
 		}
 	}
 }
@@ -257,7 +260,7 @@ func (c *Connector) cleanupStaleServers(expectedServersByBackend map[string]map[
 // periodicCleanup removes stale servers from HAProxy that no longer exist in Nomad.
 // Unlike syncExistingServices, this only performs cleanup without re-registering services,
 // making it lightweight enough for frequent execution after deployments.
-func (c *Connector) periodicCleanup(ctx context.Context) {
+func (c *Connector) periodicCleanup() {
 	services, err := c.nomadClient.GetServices()
 	if err != nil {
 		c.logger.Printf("Periodic cleanup: failed to get services from Nomad: %v", err)

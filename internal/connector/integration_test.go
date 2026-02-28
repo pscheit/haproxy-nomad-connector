@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/pscheit/haproxy-nomad-connector/internal/config"
@@ -19,6 +20,7 @@ func testConfig() *config.Config {
 
 // MockHAProxyClient for testing
 type MockHAProxyClient struct {
+	mu       sync.Mutex
 	backends map[string]*haproxy.Backend
 	servers  map[string][]haproxy.Server
 	version  int
@@ -33,10 +35,14 @@ func NewMockHAProxyClient() *MockHAProxyClient {
 }
 
 func (m *MockHAProxyClient) GetConfigVersion() (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.version, nil
 }
 
 func (m *MockHAProxyClient) GetBackend(name string) (*haproxy.Backend, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	backend, exists := m.backends[name]
 	if !exists {
 		return nil, &haproxy.APIError{StatusCode: 404}
@@ -46,26 +52,37 @@ func (m *MockHAProxyClient) GetBackend(name string) (*haproxy.Backend, error) {
 
 //nolint:gocritic // Matches interface signature
 func (m *MockHAProxyClient) CreateBackend(backend haproxy.Backend, version int) (*haproxy.Backend, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.backends[backend.Name] = &backend
 	m.version++
 	return &backend, nil
 }
 
 func (m *MockHAProxyClient) ReplaceBackend(backend *haproxy.Backend, version int) (*haproxy.Backend, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.backends[backend.Name] = backend
 	m.version++
 	return backend, nil
 }
 
 func (m *MockHAProxyClient) GetServers(backendName string) ([]haproxy.Server, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	servers, exists := m.servers[backendName]
 	if !exists {
 		return []haproxy.Server{}, nil
 	}
-	return servers, nil
+	// Return a copy to avoid races on the slice
+	result := make([]haproxy.Server, len(servers))
+	copy(result, servers)
+	return result, nil
 }
 
 func (m *MockHAProxyClient) CreateServer(backendName string, server *haproxy.Server, version int) (*haproxy.Server, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if _, exists := m.servers[backendName]; !exists {
 		m.servers[backendName] = []haproxy.Server{}
 	}
@@ -75,6 +92,8 @@ func (m *MockHAProxyClient) CreateServer(backendName string, server *haproxy.Ser
 }
 
 func (m *MockHAProxyClient) DeleteServer(backendName, serverName string, version int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	servers, exists := m.servers[backendName]
 	if !exists {
 		return &haproxy.APIError{StatusCode: 404}
@@ -89,6 +108,13 @@ func (m *MockHAProxyClient) DeleteServer(backendName, serverName string, version
 	}
 
 	return &haproxy.APIError{StatusCode: 404}
+}
+
+// AddServers is a helper for tests to add servers in a thread-safe way
+func (m *MockHAProxyClient) AddServers(backendName string, servers []haproxy.Server) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.servers[backendName] = append(m.servers[backendName], servers...)
 }
 
 // Runtime server management methods

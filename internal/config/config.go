@@ -9,8 +9,8 @@ import (
 
 // Default configuration constants
 const (
-	DefaultDrainTimeoutSec  = 10
-	DefaultCleanupDelaySec  = 30
+	DefaultDrainTimeoutSec = 10
+	DefaultCleanupDelaySec = 30
 )
 
 type Config struct {
