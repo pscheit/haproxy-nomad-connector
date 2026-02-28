@@ -9,7 +9,8 @@ import (
 
 // Default configuration constants
 const (
-	DefaultDrainTimeoutSec = 10
+	DefaultDrainTimeoutSec  = 10
+	DefaultCleanupDelaySec  = 30
 )
 
 type Config struct {
@@ -31,6 +32,7 @@ type HAProxyConfig struct {
 	BackendStrategy string `json:"backend_strategy"`
 	DrainTimeoutSec int    `json:"drain_timeout_sec"` // Time to wait before removing drained servers
 	Frontend        string `json:"frontend"`          // Frontend name for domain rules
+	CleanupDelaySec int    `json:"cleanup_delay_sec"` // Delay after last deregistration before cleaning up stale servers
 }
 
 type LogConfig struct {
@@ -53,6 +55,7 @@ func Load(configFile string) (*Config, error) {
 			BackendStrategy: getEnv("HAPROXY_BACKEND_STRATEGY", "use_existing"),
 			DrainTimeoutSec: getEnvInt("HAPROXY_DRAIN_TIMEOUT_SEC", DefaultDrainTimeoutSec),
 			Frontend:        getEnv("HAPROXY_FRONTEND", "https"),
+			CleanupDelaySec: getEnvInt("HAPROXY_CLEANUP_DELAY_SEC", DefaultCleanupDelaySec),
 		},
 		Log: LogConfig{
 			Level: getEnv("LOG_LEVEL", "info"),

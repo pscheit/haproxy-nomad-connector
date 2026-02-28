@@ -24,7 +24,7 @@ const (
 type Connector struct {
 	config        *config.Config
 	nomadClient   nomad.NomadClient
-	haproxyClient *haproxy.Client
+	haproxyClient haproxy.ClientInterface
 	logger        *log.Logger
 
 	// Metrics and state
@@ -71,6 +71,16 @@ func New(cfg *config.Config) (*Connector, error) {
 	}, nil
 }
 
+// NewForTesting creates a connector with injected dependencies for testing.
+func NewForTesting(cfg *config.Config, nomadClient nomad.NomadClient, haproxyClient haproxy.ClientInterface, logger *log.Logger) *Connector {
+	return &Connector{
+		config:        cfg,
+		nomadClient:   nomadClient,
+		haproxyClient: haproxyClient,
+		logger:        logger,
+	}
+}
+
 // Start begins the connector's main processing loop
 func (c *Connector) Start(ctx context.Context) error {
 	c.logger.Println("Starting haproxy-nomad-connector")
@@ -93,6 +103,22 @@ func (c *Connector) Start(ctx context.Context) error {
 		}
 	}()
 
+	// Set up debounced cleanup timer: fires N seconds after the last ServiceDeregistration
+	var cleanupTimer *time.Timer
+	var cleanupChan <-chan time.Time
+	if c.config.HAProxy.CleanupDelaySec > 0 {
+		cleanupTimer = time.NewTimer(0)
+		cleanupTimer.Stop()
+		// drain the channel in case the timer fired before Stop()
+		select {
+		case <-cleanupTimer.C:
+		default:
+		}
+		cleanupChan = cleanupTimer.C
+		defer cleanupTimer.Stop()
+		c.logger.Printf("Debounced stale server cleanup enabled (%ds after last deregistration)", c.config.HAProxy.CleanupDelaySec)
+	}
+
 	// Process events
 	for {
 		select {
@@ -102,6 +128,12 @@ func (c *Connector) Start(ctx context.Context) error {
 
 		case event := <-eventChan:
 			c.processEvent(ctx, event)
+			if event.Type == "ServiceDeregistration" && cleanupTimer != nil {
+				cleanupTimer.Reset(time.Duration(c.config.HAProxy.CleanupDelaySec) * time.Second)
+			}
+
+		case <-cleanupChan:
+			c.periodicCleanup(ctx)
 		}
 	}
 }
@@ -220,6 +252,28 @@ func buildExpectedServersMap(services []*nomad.Service) map[string]map[string]bo
 // Returns the number of servers removed and any error encountered
 func (c *Connector) cleanupStaleServers(expectedServersByBackend map[string]map[string]bool) (int, error) {
 	return cleanupStaleServersFromBackends(c.haproxyClient, expectedServersByBackend, c.logger)
+}
+
+// periodicCleanup removes stale servers from HAProxy that no longer exist in Nomad.
+// Unlike syncExistingServices, this only performs cleanup without re-registering services,
+// making it lightweight enough for frequent execution after deployments.
+func (c *Connector) periodicCleanup(ctx context.Context) {
+	services, err := c.nomadClient.GetServices()
+	if err != nil {
+		c.logger.Printf("Periodic cleanup: failed to get services from Nomad: %v", err)
+		return
+	}
+
+	expectedServersByBackend := buildExpectedServersMap(services)
+
+	removed, cleanupErr := c.cleanupStaleServers(expectedServersByBackend)
+	if cleanupErr != nil {
+		c.logger.Printf("Periodic cleanup: error during stale server removal: %v", cleanupErr)
+	}
+
+	if removed > 0 {
+		c.logger.Printf("Periodic cleanup: removed %d stale servers", removed)
+	}
 }
 
 // SyncAndCleanupStaleServers performs a full sync cycle: registers current Nomad services
