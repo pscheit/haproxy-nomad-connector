@@ -285,6 +285,49 @@ func TestCreateServerWithHealthCheck(t *testing.T) {
 	}
 }
 
+func TestCreateServerWithHealthCheckSetsDefaultInterval(t *testing.T) {
+	logger := log.New(&testWriter{}, "", 0)
+
+	server := createServerWithHealthCheck(
+		&Service{
+			ServiceName: "web-app",
+			Address:     "192.168.1.10",
+			Port:        8080,
+		},
+		"web_app_192_168_1_10_8080",
+		nil,
+		[]string{
+			"haproxy.enable=true",
+			"haproxy.check.path=/health",
+		},
+		logger,
+	)
+
+	assert.NotNil(t, server.Inter, "Inter should be set")
+	assert.Equal(t, int64(15000), *server.Inter, "Default health check interval should be 15s (15000ms)")
+}
+
+func TestCreateServerWithDisabledCheckHasNoInterval(t *testing.T) {
+	logger := log.New(&testWriter{}, "", 0)
+
+	server := createServerWithHealthCheck(
+		&Service{
+			ServiceName: "web-app",
+			Address:     "192.168.1.10",
+			Port:        8080,
+		},
+		"web_app_192_168_1_10_8080",
+		nil,
+		[]string{
+			"haproxy.enable=true",
+			"haproxy.check.disabled",
+		},
+		logger,
+	)
+
+	assert.Nil(t, server.Inter, "Disabled check should not have an interval")
+}
+
 // testWriter implements io.Writer for silent test logging
 type testWriter struct{}
 

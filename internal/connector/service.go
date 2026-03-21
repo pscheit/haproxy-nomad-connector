@@ -20,6 +20,8 @@ const (
 	CheckEnabled      = "enabled"
 	AdvCheckHTTP      = "httpchk"
 	HTTPMethodGET     = "GET"
+
+	DefaultHealthCheckIntervalMs int64 = 15000 // 15 seconds — Nomad is the primary health authority
 )
 
 // Status constants
@@ -954,8 +956,10 @@ func createServerWithHealthCheck(
 	}
 
 	// Default: basic TCP check
+	inter := DefaultHealthCheckIntervalMs
+	server.Inter = &inter
 	server.CheckType = CheckTypeTCP
-	logger.Printf("Using default TCP health check for server %s", serverName)
+	logger.Printf("Using default TCP health check for server %s, inter %dms", serverName, inter)
 
 	return server
 }
@@ -1129,6 +1133,9 @@ func applyHealthCheckToServer(server *haproxy.Server, healthCheckConfig *HealthC
 		return
 	}
 
+	inter := DefaultHealthCheckIntervalMs
+	server.Inter = &inter
+
 	switch healthCheckConfig.Type {
 	case CheckTypeHTTP:
 		server.CheckType = CheckTypeHTTP
@@ -1137,14 +1144,14 @@ func applyHealthCheckToServer(server *haproxy.Server, healthCheckConfig *HealthC
 		if healthCheckConfig.Host != "" {
 			server.CheckHost = healthCheckConfig.Host
 		}
-		logger.Printf("Configured HTTP health check for server %s: %s %s (source: %s)",
-			server.Name, healthCheckConfig.Method, healthCheckConfig.Path, source)
+		logger.Printf("Configured HTTP health check for server %s: %s %s, inter %dms (source: %s)",
+			server.Name, healthCheckConfig.Method, healthCheckConfig.Path, inter, source)
 	case CheckTypeTCP:
 		server.CheckType = CheckTypeTCP
-		logger.Printf("Configured TCP health check for server %s (source: %s)", server.Name, source)
+		logger.Printf("Configured TCP health check for server %s, inter %dms (source: %s)", server.Name, inter, source)
 	default:
 		server.CheckType = CheckTypeTCP
-		logger.Printf("Using TCP fallback health check for server %s (source: %s)", server.Name, source)
+		logger.Printf("Using TCP fallback health check for server %s, inter %dms (source: %s)", server.Name, inter, source)
 	}
 }
 

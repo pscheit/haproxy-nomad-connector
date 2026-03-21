@@ -43,6 +43,7 @@ type Server struct {
 	CheckPath   string `json:"check_path,omitempty"`   // HTTP check path
 	CheckMethod string `json:"check_method,omitempty"` // HTTP check method
 	CheckHost   string `json:"check_host,omitempty"`   // HTTP check host header
+	Inter       *int64 `json:"inter,omitempty"`         // Health check interval in milliseconds
 }
 
 type RuntimeServer struct {
