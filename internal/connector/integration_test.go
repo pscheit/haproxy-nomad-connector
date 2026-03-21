@@ -99,8 +99,8 @@ func (m *MockHAProxyClient) DeleteServer(backendName, serverName string, version
 		return &haproxy.APIError{StatusCode: 404}
 	}
 
-	for i, server := range servers {
-		if server.Name == serverName {
+	for i := range servers {
+		if servers[i].Name == serverName {
 			m.servers[backendName] = append(servers[:i], servers[i+1:]...)
 			m.version++
 			return nil

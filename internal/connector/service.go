@@ -509,8 +509,8 @@ func ensureServer(client haproxy.ClientInterface, backendName, serverName, addre
 		return false, fmt.Errorf("failed to get existing servers for backend %s: %w", backendName, err)
 	}
 
-	for _, existingServer := range existingServers {
-		if existingServer.Name == serverName {
+	for i := range existingServers {
+		if existingServers[i].Name == serverName {
 			return true, nil
 		}
 	}
@@ -606,8 +606,8 @@ func handleServiceDeregistrationWithDrainTimeout(
 
 	// Count remaining servers after this removal (exclude the server being removed)
 	remainingServers := 0
-	for _, server := range existingServers {
-		if server.Name != serverName {
+	for i := range existingServers {
+		if existingServers[i].Name != serverName {
 			remainingServers++
 		}
 	}
@@ -892,8 +892,8 @@ func checkServerExists(
 		return false, nil, fmt.Errorf("failed to get servers for backend %s: %w", backendName, err)
 	}
 
-	for _, existingServer := range existingServers {
-		if existingServer.Name == serverName {
+	for i := range existingServers {
+		if existingServers[i].Name == serverName {
 			result := map[string]string{
 				"status":  StatusAlreadyExists,
 				"backend": backendName,

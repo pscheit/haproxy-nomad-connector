@@ -348,14 +348,14 @@ func cleanupStaleServersFromBackends(
 		}
 
 		// Find and remove stale servers
-		for _, server := range haproxyServers {
-			if expectedServers[server.Name] {
+		for i := range haproxyServers {
+			if expectedServers[haproxyServers[i].Name] {
 				// Server exists in Nomad, keep it
 				continue
 			}
 
 			// This server is in HAProxy but not in Nomad - it's stale
-			logger.Printf("Removing stale server %s from backend %s", server.Name, backendName)
+			logger.Printf("Removing stale server %s from backend %s", haproxyServers[i].Name, backendName)
 
 			version, err := haproxyClient.GetConfigVersion()
 			if err != nil {
@@ -364,8 +364,8 @@ func cleanupStaleServersFromBackends(
 				continue
 			}
 
-			if err := haproxyClient.DeleteServer(backendName, server.Name, version); err != nil {
-				logger.Printf("Failed to remove stale server %s: %v", server.Name, err)
+			if err := haproxyClient.DeleteServer(backendName, haproxyServers[i].Name, version); err != nil {
+				logger.Printf("Failed to remove stale server %s: %v", haproxyServers[i].Name, err)
 				lastErr = err
 				continue
 			}
@@ -473,9 +473,11 @@ func (c *Connector) startHealthServer(ctx context.Context) {
 
 	c.logger.Printf("Starting health server on :8080")
 
-	go func() {
+	go func() { //nolint:gosec // fresh context needed for graceful shutdown after parent cancellation
 		<-ctx.Done()
-		if err := server.Shutdown(context.Background()); err != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), HealthCheckTimeoutSec*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
 			c.logger.Printf("Error shutting down HTTP server: %v", err)
 		}
 	}()
