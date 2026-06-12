@@ -89,7 +89,7 @@ use the makefile to run tests, linter and build.
 - **Nomad cluster** with service discovery
 - **Go 1.21+** for building
 
-⚠️  **HAProxy 2.x is NOT supported** due to incomplete DataPlane API runtime endpoints. See [ADR-010](docs/adrs/ADR-010-haproxy-3-0-runtime-api-requirement.md) for details.
+⚠️  **HAProxy 2.x is NOT supported** due to incomplete DataPlane API runtime endpoints. See [ADR-010](docs/adr/010-haproxy-3-0-runtime-api-requirement.md) for details.
 
 ## 🚀 Installation
 
