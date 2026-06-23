@@ -248,8 +248,12 @@ func handleServiceRegistration(
 	if err != nil {
 		return nil, err
 	}
+	// A registration (re-)claims this server: cancel any pending graceful-drain deletion
+	// so an in-place restart's same-port re-register isn't deleted (ADR-011).
+	pendingDeletions.cancel(backendName, serverName)
 	if serverExists {
 		result["status"] = StatusAlreadyExists
+		reready(client, backendName, serverName, nil)
 	} else {
 		result["status"] = StatusCreated
 	}
@@ -625,6 +629,16 @@ func handleServiceDeregistrationWithDrainTimeout(
 	return result, nil
 }
 
+// reready brings a server that a just-superseded deregistration may have put into
+// "drain" back into rotation (ADR-011). Best-effort: the authoritative state (the
+// server present in config) is already correct, so a runtime hiccup here only warrants
+// a warning, not a failed registration.
+func reready(client haproxy.ClientInterface, backendName, serverName string, logger *log.Logger) {
+	if err := client.ReadyServer(backendName, serverName); err != nil && logger != nil {
+		logger.Printf("Warning: failed to set re-registered server %s/%s ready: %v", backendName, serverName, err)
+	}
+}
+
 // drainAndRemoveServer handles graceful draining and removal of a server
 func drainAndRemoveServer(
 	client haproxy.ClientInterface,
@@ -655,20 +669,32 @@ func drainAndRemoveServer(
 	result["status"] = StatusDraining
 	result["method"] = MethodGracefulDrain
 
-	// Schedule delayed removal after drain period
-	go scheduleDelayedServerRemoval(client, backendName, serverName, drainTimeoutSec, logger)
+	// Schedule delayed removal after drain period. The token lets a re-registration
+	// of this same server cancel the removal (ADR-011 in-place-restart race).
+	token := pendingDeletions.schedule(backendName, serverName)
+	go scheduleDelayedServerRemoval(client, backendName, serverName, drainTimeoutSec, logger, token)
 	return nil
 }
 
-// scheduleDelayedServerRemoval removes a server after drain timeout
+// scheduleDelayedServerRemoval removes a server after drain timeout, unless the server
+// was re-registered in the meantime (which cancels the pending removal, ADR-011).
 func scheduleDelayedServerRemoval(
 	client haproxy.ClientInterface,
 	backendName, serverName string,
 	drainTimeoutSec int,
 	logger *log.Logger,
+	token uint64,
 ) {
 	drainDuration := time.Duration(drainTimeoutSec) * time.Second
 	time.Sleep(drainDuration)
+
+	if !pendingDeletions.claim(backendName, serverName, token) {
+		if logger != nil {
+			logger.Printf("Skipping delayed deletion of server %s from backend %s: re-registered during drain",
+				serverName, backendName)
+		}
+		return
+	}
 
 	version, versionErr := client.GetConfigVersion()
 	if versionErr != nil {
@@ -815,6 +841,11 @@ func handleServiceRegistrationWithHealthCheck(
 		return nil, err
 	}
 	if serverExists {
+		// An in-place restart re-registers the same address:port while a previous
+		// deregistration's graceful drain may still be pending. Cancel that drain and
+		// bring the server back into rotation (ADR-011).
+		pendingDeletions.cancel(backendName, serverName)
+		reready(client, backendName, serverName, logger)
 		return existingResult, nil
 	}
 
@@ -825,6 +856,9 @@ func handleServiceRegistrationWithHealthCheck(
 	if err != nil {
 		return nil, fmt.Errorf("failed to create server %s in backend %s: %w", serverName, backendName, err)
 	}
+	// A freshly created server must not be removed by a stale pending drain left over
+	// from a previous incarnation of the same name (ADR-011).
+	pendingDeletions.cancel(backendName, serverName)
 
 	// Initialize result map
 	result := map[string]string{

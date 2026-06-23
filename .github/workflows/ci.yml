@@ -123,7 +123,10 @@ jobs:
     - name: Run golangci-lint
       uses: golangci/golangci-lint-action@v8
       with:
-        version: latest
+        # Pinned, not `latest`: a floating version silently drifted and started
+        # flagging pre-existing goconst issues, breaking CI on unrelated changes.
+        # Keep in sync with the version developers run locally; bump deliberately.
+        version: v2.11.3
         args: ./... --timeout=5m
 
   security:
