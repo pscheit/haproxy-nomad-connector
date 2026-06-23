@@ -70,14 +70,19 @@ test-coverage: deps
 bench: deps
 	$(GOTEST) -bench=. -benchmem ./cmd/... ./internal/...
 
-## lint: Run linter
+# Keep in sync with .github/workflows/ci.yml (golangci-lint-action version).
+# Pinned so local lint matches CI and neither drifts onto a newer release.
+GOLANGCI_LINT_VERSION=2.11.3
+
+## lint: Run linter (pinned version, must match CI)
 lint:
-	@if command -v golangci-lint >/dev/null 2>&1; then \
-		golangci-lint run ./...; \
-	else \
-		echo "golangci-lint not installed. Install with: https://golangci-lint.run/docs/welcome/install/#binaries"; \
+	@if ! command -v golangci-lint >/dev/null 2>&1; then \
+		echo "golangci-lint not installed. Install v$(GOLANGCI_LINT_VERSION): https://golangci-lint.run/docs/welcome/install/#binaries"; \
 		exit 1; \
 	fi
+	@golangci-lint version 2>&1 | grep -q "$(GOLANGCI_LINT_VERSION)" || \
+		echo "WARNING: local golangci-lint differs from the pinned v$(GOLANGCI_LINT_VERSION) used by CI — results may not match"
+	golangci-lint run ./...
 
 ## fmt: Format code
 fmt:
