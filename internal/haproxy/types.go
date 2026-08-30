@@ -167,6 +167,7 @@ type ClientInterface interface {
 	AddFrontendRuleWithType(frontend, domain, backend string, domainType DomainType) error
 	RemoveFrontendRule(frontend, domain string) error
 	GetFrontendRules(frontend string) ([]FrontendRule, error)
+	ReorderFrontendRules(frontend string) error
 
 	// HTTP check management
 	SetHTTPChecks(backendName string, checks []HTTPCheck, version int) error

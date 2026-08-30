@@ -226,6 +226,10 @@ func (m *mockHAProxyClient) GetFrontendRules(frontend string) ([]haproxy.Fronten
 	return []haproxy.FrontendRule{}, nil
 }
 
+func (m *mockHAProxyClient) ReorderFrontendRules(frontend string) error {
+	return nil
+}
+
 func (m *mockHAProxyClient) GetHTTPChecks(backendName string) ([]haproxy.HTTPCheck, error) {
 	// Mock implementation - return empty for existing tests
 	return []haproxy.HTTPCheck{}, nil

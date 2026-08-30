@@ -224,6 +224,11 @@ func (c *Connector) syncExistingServices(ctx context.Context) error {
 		c.logger.Printf("Warning: Error during stale server cleanup: %v", cleanupErr)
 	}
 
+	// Repair rule order built up before the connector sorted rules on write
+	if err := c.haproxyClient.ReorderFrontendRules(c.config.HAProxy.Frontend); err != nil {
+		c.logger.Printf("Warning: Failed to reorder frontend rules: %v", err)
+	}
+
 	c.logger.Printf("Initial sync complete: %d services synced, %d stale servers removed", synced, removed)
 	return nil
 }

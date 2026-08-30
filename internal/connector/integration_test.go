@@ -20,10 +20,11 @@ func testConfig() *config.Config {
 
 // MockHAProxyClient for testing
 type MockHAProxyClient struct {
-	mu       sync.Mutex
-	backends map[string]*haproxy.Backend
-	servers  map[string][]haproxy.Server
-	version  int
+	mu                 sync.Mutex
+	backends           map[string]*haproxy.Backend
+	servers            map[string][]haproxy.Server
+	version            int
+	reorderedFrontends []string
 }
 
 func NewMockHAProxyClient() *MockHAProxyClient {
@@ -160,6 +161,13 @@ func (m *MockHAProxyClient) RemoveFrontendRule(frontend, domain string) error {
 func (m *MockHAProxyClient) GetFrontendRules(frontend string) ([]haproxy.FrontendRule, error) {
 	// Mock implementation - return empty rules for existing tests
 	return []haproxy.FrontendRule{}, nil
+}
+
+func (m *MockHAProxyClient) ReorderFrontendRules(frontend string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reorderedFrontends = append(m.reorderedFrontends, frontend)
+	return nil
 }
 
 func (m *MockHAProxyClient) GetHTTPChecks(backendName string) ([]haproxy.HTTPCheck, error) {
