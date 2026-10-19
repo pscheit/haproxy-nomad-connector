@@ -288,6 +288,65 @@ func TestStart_DebouncedCleanupAfterEventProcessing(t *testing.T) {
 	<-done
 }
 
+func cleanupConnector(haproxyClient haproxy.ClientInterface) *Connector {
+	return NewForTesting(
+		&config.Config{HAProxy: config.HAProxyConfig{Frontend: "https", CleanupDelaySec: 30}},
+		&mockNomadClient{services: webAppServices()}, haproxyClient, testLogger(),
+	)
+}
+
+// A stopped job has no services in Nomad anymore, so its backend is not in the expected map.
+func TestPeriodicCleanup_RemovesServersOfStoppedJob(t *testing.T) {
+	haproxyClient := NewMockHAProxyClient()
+	haproxyClient.backends["web_app"] = &haproxy.Backend{Name: "web_app"}
+	haproxyClient.servers["web_app"] = []haproxy.Server{
+		{Name: expectedServerName, Address: "10.0.0.1", Port: 8080},
+	}
+	haproxyClient.backends["test_webhook"] = &haproxy.Backend{Name: "test_webhook"}
+	haproxyClient.servers["test_webhook"] = []haproxy.Server{
+		{Name: "test_webhook_192_168_5_14_30647", Address: "192.168.5.14", Port: 30647},
+	}
+
+	cleanupConnector(haproxyClient).periodicCleanup()
+
+	if servers, _ := haproxyClient.GetServers("test_webhook"); len(servers) != 0 {
+		t.Errorf("Expected servers of stopped job to be removed, got %v", servers)
+	}
+	if servers, _ := haproxyClient.GetServers("web_app"); len(servers) != 1 {
+		t.Errorf("Expected running service to keep its server, got %v", servers)
+	}
+}
+
+func TestPeriodicCleanup_KeepsStaticServers(t *testing.T) {
+	haproxyClient := NewMockHAProxyClient()
+	haproxyClient.backends["nginx"] = &haproxy.Backend{Name: "nginx"}
+	haproxyClient.servers["nginx"] = []haproxy.Server{
+		{Name: "nginx1", Address: "127.0.0.1", Port: 8080},
+	}
+
+	cleanupConnector(haproxyClient).periodicCleanup()
+
+	if servers, _ := haproxyClient.GetServers("nginx"); len(servers) != 1 {
+		t.Errorf("Servers from haproxy.cfg are not managed by the connector and must stay, got %v", servers)
+	}
+}
+
+func TestPeriodicCleanup_KeepsServersStillDraining(t *testing.T) {
+	haproxyClient := NewMockHAProxyClient()
+	haproxyClient.backends["test_webhook"] = &haproxy.Backend{Name: "test_webhook"}
+	haproxyClient.servers["test_webhook"] = []haproxy.Server{
+		{Name: "test_webhook_192_168_5_14_30647", Address: "192.168.5.14", Port: 30647},
+	}
+	pendingDeletions.schedule("test_webhook", "test_webhook_192_168_5_14_30647")
+	t.Cleanup(func() { pendingDeletions.cancel("test_webhook", "test_webhook_192_168_5_14_30647") })
+
+	cleanupConnector(haproxyClient).periodicCleanup()
+
+	if servers, _ := haproxyClient.GetServers("test_webhook"); len(servers) != 1 {
+		t.Errorf("A draining server is removed by its delayed deletion, cleanup must not cut the drain short, got %v", servers)
+	}
+}
+
 // streamingMockNomadClient allows injecting events via a channel
 type streamingMockNomadClient struct {
 	mockNomadClient

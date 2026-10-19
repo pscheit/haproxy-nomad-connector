@@ -144,6 +144,10 @@ func (m *mockHAProxyClient) GetConfigVersion() (int, error) {
 	return 1, m.getVersionError
 }
 
+func (m *mockHAProxyClient) GetBackends() ([]haproxy.Backend, error) {
+	return nil, nil
+}
+
 func (m *mockHAProxyClient) GetBackend(name string) (*haproxy.Backend, error) {
 	return nil, &haproxy.APIError{StatusCode: 404}
 }

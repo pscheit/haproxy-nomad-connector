@@ -51,6 +51,14 @@ func (r *pendingDeletionRegistry) claim(backendName, serverName string, token ui
 	return true
 }
 
+// isPending reports whether a delayed removal is scheduled for the server.
+func (r *pendingDeletionRegistry) isPending(backendName, serverName string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, exists := r.current[pendingDeletionKey(backendName, serverName)]
+	return exists
+}
+
 // cancel invalidates any pending deletion for the server because it has been
 // re-registered. Any in-flight claim() with the old token will return false.
 func (r *pendingDeletionRegistry) cancel(backendName, serverName string) {

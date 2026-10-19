@@ -651,12 +651,7 @@ func drainAndRemoveServer(
 	err := client.DrainServer(backendName, serverName)
 	if err != nil {
 		// If drain fails (maybe server doesn't exist), try direct deletion
-		version, versionErr := client.GetConfigVersion()
-		if versionErr != nil {
-			return fmt.Errorf("failed to get config version for fallback deletion: %w", versionErr)
-		}
-
-		err = client.DeleteServer(backendName, serverName, version)
+		err = deleteServerWithRetry(client, backendName, serverName)
 		if err != nil {
 			return fmt.Errorf("failed to delete server %s from backend %s: %w", serverName, backendName, err)
 		}
@@ -674,6 +669,36 @@ func drainAndRemoveServer(
 	token := pendingDeletions.schedule(backendName, serverName)
 	go scheduleDelayedServerRemoval(client, backendName, serverName, drainTimeoutSec, logger, token)
 	return nil
+}
+
+const (
+	maxDeleteAttempts  = 5
+	deleteRetryBackoff = 50 * time.Millisecond
+)
+
+// deleteServerWithRetry deletes with a fresh config version per attempt. Concurrent writes
+// (parallel delayed deletes of one job, cleanup, registrations) make the version outdated
+// between read and write, which the Data Plane API rejects with 409 (2026-10-19 lb1).
+// A server that is already gone counts as deleted.
+func deleteServerWithRetry(client haproxy.ClientInterface, backendName, serverName string) error {
+	var err error
+	for attempt := 1; attempt <= maxDeleteAttempts; attempt++ {
+		var version int
+		version, err = client.GetConfigVersion()
+		if err != nil {
+			return fmt.Errorf("failed to get config version: %w", err)
+		}
+
+		err = client.DeleteServer(backendName, serverName, version)
+		if err == nil || haproxy.IsNotFound(err) {
+			return nil
+		}
+		if !haproxy.IsVersionConflict(err) {
+			return err
+		}
+		time.Sleep(time.Duration(attempt) * deleteRetryBackoff)
+	}
+	return fmt.Errorf("giving up after %d version conflicts: %w", maxDeleteAttempts, err)
 }
 
 // scheduleDelayedServerRemoval removes a server after drain timeout, unless the server
@@ -696,15 +721,7 @@ func scheduleDelayedServerRemoval(
 		return
 	}
 
-	version, versionErr := client.GetConfigVersion()
-	if versionErr != nil {
-		if logger != nil {
-			logger.Printf("Warning: failed to get config version for delayed deletion: %v", versionErr)
-		}
-		return
-	}
-
-	deleteErr := client.DeleteServer(backendName, serverName, version)
+	deleteErr := deleteServerWithRetry(client, backendName, serverName)
 	if deleteErr != nil {
 		if logger != nil {
 			logger.Printf("Warning: failed delayed deletion of server %s from backend %s: %v", serverName, backendName, deleteErr)

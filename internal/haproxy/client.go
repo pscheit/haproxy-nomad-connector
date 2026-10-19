@@ -171,7 +171,10 @@ func (c *Client) makeRequest(method, path string, body, result interface{}, vers
 
 	if resp.StatusCode >= HTTPStatusClientErrorMin {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+		return &APIError{
+			StatusCode: resp.StatusCode,
+			Message:    fmt.Sprintf("API request failed with status %d: %s", resp.StatusCode, string(bodyBytes)),
+		}
 	}
 
 	if result != nil && resp.StatusCode != http.StatusNoContent {

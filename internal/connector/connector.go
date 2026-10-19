@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -351,34 +352,36 @@ func cleanupStaleServersFromBackends(
 	removed := 0
 	var lastErr error
 
-	for backendName, expectedServers := range expectedServersByBackend {
-		// Get current servers in HAProxy for this backend
+	// All backends, not only those in Nomad: a stopped job has no services left, but its
+	// servers stay in HAProxy when their delayed deletion failed.
+	backends, err := haproxyClient.GetBackends()
+	if err != nil {
+		return 0, fmt.Errorf("failed to list backends: %w", err)
+	}
+
+	for i := range backends {
+		backendName := backends[i].Name
+		expectedServers := expectedServersByBackend[backendName]
+
 		haproxyServers, err := haproxyClient.GetServers(backendName)
 		if err != nil {
-			// Backend might not exist yet, skip
 			logger.Printf("Could not get servers for backend %s: %v", backendName, err)
+			lastErr = err
 			continue
 		}
 
-		// Find and remove stale servers
-		for i := range haproxyServers {
-			if expectedServers[haproxyServers[i].Name] {
-				// Server exists in Nomad, keep it
+		for j := range haproxyServers {
+			serverName := haproxyServers[j].Name
+			if expectedServers[serverName] ||
+				!isConnectorServerName(backendName, serverName) ||
+				pendingDeletions.isPending(backendName, serverName) {
 				continue
 			}
 
-			// This server is in HAProxy but not in Nomad - it's stale
-			logger.Printf("Removing stale server %s from backend %s", haproxyServers[i].Name, backendName)
+			logger.Printf("Removing stale server %s from backend %s", serverName, backendName)
 
-			version, err := haproxyClient.GetConfigVersion()
-			if err != nil {
-				logger.Printf("Failed to get config version for stale server removal: %v", err)
-				lastErr = err
-				continue
-			}
-
-			if err := haproxyClient.DeleteServer(backendName, haproxyServers[i].Name, version); err != nil {
-				logger.Printf("Failed to remove stale server %s: %v", haproxyServers[i].Name, err)
+			if err := deleteServerWithRetry(haproxyClient, backendName, serverName); err != nil {
+				logger.Printf("Failed to remove stale server %s: %v", serverName, err)
 				lastErr = err
 				continue
 			}
@@ -388,6 +391,15 @@ func cleanupStaleServersFromBackends(
 	}
 
 	return removed, lastErr
+}
+
+var connectorServerSuffix = regexp.MustCompile(`^\d{1,3}_\d{1,3}_\d{1,3}_\d{1,3}_\d+$`)
+
+// isConnectorServerName matches the names from generateServerName ({backend}_{ip}_{port}).
+// Servers with other names come from haproxy.cfg and are not managed by the connector.
+func isConnectorServerName(backendName, serverName string) bool {
+	suffix, found := strings.CutPrefix(serverName, backendName+"_")
+	return found && connectorServerSuffix.MatchString(suffix)
 }
 
 // processEvent handles individual Nomad service events

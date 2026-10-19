@@ -813,3 +813,40 @@ func TestClient_AddFrontendRule_RegexDomain(t *testing.T) {
 		t.Errorf("Expected fixed ACL name %s, got %s", expectedFixedACLName, capturedACLName)
 	}
 }
+
+func TestClient_DeleteServer_VersionConflictIsDetectable(t *testing.T) {
+	body := `{"code":409,"message":"version mismatch: version mismatch, transaction version: 1128, configured version: 1129"}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	err := NewClient(server.URL, "admin", "password").DeleteServer("be", "srv", 1128)
+
+	if !IsVersionConflict(err) {
+		t.Fatalf("Expected a version conflict error, got: %v", err)
+	}
+	if IsNotFound(err) {
+		t.Error("A version conflict must not count as not found")
+	}
+	if err.Error() != "API request failed with status 409: "+body {
+		t.Errorf("Error message must keep the API body for the logs, got: %s", err.Error())
+	}
+}
+
+func TestClient_DeleteServer_NotFoundIsDetectable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	err := NewClient(server.URL, "admin", "password").DeleteServer("be", "srv", 1)
+
+	if !IsNotFound(err) {
+		t.Fatalf("Expected a not found error, got: %v", err)
+	}
+	if IsVersionConflict(err) {
+		t.Error("A not found error must not count as version conflict")
+	}
+}

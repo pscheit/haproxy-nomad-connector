@@ -41,6 +41,16 @@ func (m *MockHAProxyClient) GetConfigVersion() (int, error) {
 	return m.version, nil
 }
 
+func (m *MockHAProxyClient) GetBackends() ([]haproxy.Backend, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	backends := make([]haproxy.Backend, 0, len(m.backends))
+	for _, backend := range m.backends {
+		backends = append(backends, *backend)
+	}
+	return backends, nil
+}
+
 func (m *MockHAProxyClient) GetBackend(name string) (*haproxy.Backend, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -95,6 +105,9 @@ func (m *MockHAProxyClient) CreateServer(backendName string, server *haproxy.Ser
 func (m *MockHAProxyClient) DeleteServer(backendName, serverName string, version int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if version != m.version {
+		return &haproxy.APIError{StatusCode: 409, Message: "version mismatch"}
+	}
 	servers, exists := m.servers[backendName]
 	if !exists {
 		return &haproxy.APIError{StatusCode: 404}

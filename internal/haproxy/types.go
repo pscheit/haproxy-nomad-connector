@@ -1,6 +1,10 @@
 package haproxy
 
-import "context"
+import (
+	"context"
+	"errors"
+	"net/http"
+)
 
 // Data Plane API response structures
 type APIInfo struct {
@@ -145,9 +149,25 @@ func (e *APIError) Error() string {
 	return e.Message
 }
 
+// IsVersionConflict reports a 409: the request carried an outdated configuration version
+// because another write changed the configuration in between.
+func IsVersionConflict(err error) bool {
+	return hasStatus(err, http.StatusConflict)
+}
+
+func IsNotFound(err error) bool {
+	return hasStatus(err, http.StatusNotFound)
+}
+
+func hasStatus(err error, statusCode int) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == statusCode
+}
+
 // ClientInterface defines the interface for HAProxy client operations
 type ClientInterface interface {
 	GetConfigVersion() (int, error)
+	GetBackends() ([]Backend, error)
 	GetBackend(name string) (*Backend, error)
 	CreateBackend(backend Backend, version int) (*Backend, error)
 	ReplaceBackend(backend *Backend, version int) (*Backend, error)
