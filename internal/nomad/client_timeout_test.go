@@ -95,8 +95,9 @@ func TestStreamReconnectsOnTimeout(t *testing.T) {
 
 	eventChan := make(chan ServiceEvent, 10)
 
-	// Start streaming
+	streamDone := make(chan struct{})
 	go func() {
+		defer close(streamDone)
 		err := client.StreamServiceEvents(ctx, eventChan)
 		t.Logf("StreamServiceEvents ended with: %v", err)
 	}()
@@ -104,6 +105,8 @@ func TestStreamReconnectsOnTimeout(t *testing.T) {
 	// Wait for reconnection attempts
 	time.Sleep(6 * time.Second)
 	cancel()
+	// t.Logf after the test returned is a data race
+	<-streamDone
 
 	// Verify we got multiple connection attempts
 	attempts := connections.Load()

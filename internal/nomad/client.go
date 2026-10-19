@@ -6,17 +6,20 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	nomadapi "github.com/hashicorp/nomad/api"
 )
 
-// Client configuration constants
-const (
-	StreamReconnectDelaySec = 5
+// EventTypeStreamReconnected is sent on the event channel after the stream reconnected.
+// Events may have been missed while it was down, so the receiver has to resync.
+const EventTypeStreamReconnected = "StreamReconnected"
+
+// variables, so tests do not have to wait
+var (
+	streamReconnectDelay = 5 * time.Second
+	apiRequestTimeout    = 30 * time.Second
 )
 
 type Client struct {
@@ -69,6 +72,8 @@ type ServiceCheck struct {
 func NewClient(address, token, region string, logger *log.Logger) (*Client, error) {
 	config := nomadapi.DefaultConfig()
 	config.Address = address
+	// only for the plain API calls, the event stream builds its own client without a timeout
+	config.HttpClient = &http.Client{Timeout: apiRequestTimeout}
 
 	if token != "" {
 		config.SecretID = token
@@ -92,43 +97,57 @@ func NewClient(address, token, region string, logger *log.Logger) (*Client, erro
 	}, nil
 }
 
-// StreamServiceEvents streams Nomad service events
+// StreamServiceEvents streams Nomad service events. It reconnects after every stream error and
+// sends an EventTypeStreamReconnected event on every connect after a failed attempt.
 func (c *Client) StreamServiceEvents(ctx context.Context, eventChan chan<- ServiceEvent) error {
+	// also true when the very first connect failed: then the initial sync most likely failed too
+	failedBefore := false
 	for {
+		err := c.streamEvents(ctx, eventChan, failedBefore)
+		failedBefore = true
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		c.logger.Printf("Event stream error: %v, reconnecting in %s", err, streamReconnectDelay)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		default:
-			if err := c.streamEvents(ctx, eventChan); err != nil {
-				c.logger.Printf("Event stream error: %v", err)
-				c.logger.Printf("Reconnecting in 5 seconds...")
-
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(StreamReconnectDelaySec * time.Second):
-					continue
-				}
-			}
+		case <-time.After(streamReconnectDelay):
 		}
 	}
 }
 
-func (c *Client) streamEvents(ctx context.Context, eventChan chan<- ServiceEvent) error {
-	// Create HTTP request for event stream
+// streamEvents reads one connection until it fails, it never returns nil
+func (c *Client) streamEvents(ctx context.Context, eventChan chan<- ServiceEvent, isReconnect bool) error {
+	body, err := c.openEventStream(ctx)
+	if err != nil {
+		return err
+	}
+	defer body.Close()
+
+	if isReconnect {
+		select {
+		case eventChan <- ServiceEvent{Type: EventTypeStreamReconnected}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	return c.readEvents(ctx, json.NewDecoder(body), eventChan)
+}
+
+func (c *Client) openEventStream(ctx context.Context) (io.ReadCloser, error) {
 	url := fmt.Sprintf("%s/v1/event/stream?topic=Service", c.address)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, http.NoBody)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Add authentication if token provided
 	if c.token != "" {
 		req.Header.Set("X-Nomad-Token", c.token)
 	}
-
-	// Add headers for streaming
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Cache-Control", "no-cache")
 
@@ -138,79 +157,46 @@ func (c *Client) streamEvents(ctx context.Context, eventChan chan<- ServiceEvent
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to connect to event stream: %w", err)
+		return nil, fmt.Errorf("failed to connect to event stream: %w", err)
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("event stream returned status %d", resp.StatusCode)
+		resp.Body.Close()
+		return nil, fmt.Errorf("event stream returned status %d", resp.StatusCode)
 	}
 
 	c.logger.Printf("Connected to Nomad event stream: %s", url)
+	return resp.Body, nil
+}
 
-	// Process streaming JSON lines
-	decoder := json.NewDecoder(resp.Body)
-
+// readEvents forwards service events until the stream fails, it never returns nil
+func (c *Client) readEvents(ctx context.Context, decoder *json.Decoder, eventChan chan<- ServiceEvent) error {
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			var eventWrapper struct {
-				Events []ServiceEvent `json:"Events"`
-			}
+		var eventWrapper struct {
+			Events []ServiceEvent `json:"Events"`
+		}
 
-			if err := decoder.Decode(&eventWrapper); err != nil {
-				if shouldReconnect, reconnectErr := c.handleStreamError(err); shouldReconnect {
-					return reconnectErr
-				}
-				continue
+		// A json.Decoder stays broken after any error (a syntax error included), so every
+		// error ends this connection. Continuing here once looped forever and filled the disk.
+		if err := decoder.Decode(&eventWrapper); err != nil {
+			if err == io.EOF {
+				return fmt.Errorf("event stream ended")
 			}
+			return fmt.Errorf("failed to read event stream: %w", err)
+		}
 
-			// Process each event
-			for _, event := range eventWrapper.Events {
-				if event.Topic == "Service" && event.Payload.Service != nil {
-					select {
-					case eventChan <- event:
-						c.logger.Printf("Processed %s event for service %s",
-							event.Type, event.Payload.Service.ServiceName)
-					case <-ctx.Done():
-						return ctx.Err()
-					}
+		for _, event := range eventWrapper.Events {
+			if event.Topic == "Service" && event.Payload.Service != nil {
+				select {
+				case eventChan <- event:
+					c.logger.Printf("Processed %s event for service %s",
+						event.Type, event.Payload.Service.ServiceName)
+				case <-ctx.Done():
+					return ctx.Err()
 				}
 			}
 		}
 	}
-}
-
-// handleStreamError determines if a streaming error should trigger reconnection
-func (c *Client) handleStreamError(err error) (shouldReconnect bool, reconnectErr error) {
-	c.logger.Printf("DEBUG: handleStreamError called with error: %T: %v", err, err)
-
-	if err == io.EOF {
-		c.logger.Printf("DEBUG: EOF detected, triggering reconnection")
-		return true, fmt.Errorf("event stream ended")
-	}
-
-	// Connection errors (like timeouts) should trigger reconnection
-	if netErr, ok := err.(*net.OpError); ok {
-		c.logger.Printf("DEBUG: Network error detected, triggering reconnection")
-		return true, fmt.Errorf("network error during event stream: %w", netErr)
-	}
-
-	// For connection issues, return error to trigger reconnection
-	errStr := err.Error()
-	if strings.Contains(errStr, "connection timed out") ||
-		strings.Contains(errStr, "connection reset") ||
-		strings.Contains(errStr, "broken pipe") ||
-		strings.Contains(errStr, "unexpected EOF") {
-		c.logger.Printf("DEBUG: Connection issue detected (%s), triggering reconnection", errStr)
-		return true, fmt.Errorf("connection lost: %w", err)
-	}
-
-	c.logger.Printf("Failed to decode event: %v", err)
-	c.logger.Printf("DEBUG: Not triggering reconnection for this error type")
-	return false, nil
 }
 
 // GetServices gets all registered services (for initial sync)

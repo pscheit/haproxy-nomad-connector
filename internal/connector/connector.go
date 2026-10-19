@@ -130,6 +130,14 @@ func (c *Connector) Start(ctx context.Context) error {
 			return nil
 
 		case event := <-eventChan:
+			if event.Type == nomad.EventTypeStreamReconnected {
+				// events of the time without a stream are lost, only a full sync catches up
+				c.logger.Println("Event stream reconnected, resyncing all services")
+				if err := c.syncExistingServices(ctx); err != nil {
+					c.logger.Printf("Warning: Resync after reconnect failed: %v", err)
+				}
+				continue
+			}
 			c.processEvent(ctx, event)
 			if event.Type == "ServiceDeregistration" && cleanupTimer != nil {
 				cleanupTimer.Reset(time.Duration(c.config.HAProxy.CleanupDelaySec) * time.Second)
@@ -470,13 +478,18 @@ func (c *Connector) startHealthServer(ctx context.Context) {
 		}`, processed, errors, lastEvent.Format(time.RFC3339), time.Since(lastEvent).Seconds())
 	})
 
+	address := c.config.Health.Address
+	if address == "" {
+		address = config.DefaultHealthAddress
+	}
+
 	server := &http.Server{
-		Addr:              ":8080",
+		Addr:              address,
 		Handler:           mux,
 		ReadHeaderTimeout: HealthCheckTimeoutSec * time.Second,
 	}
 
-	c.logger.Printf("Starting health server on :8080")
+	c.logger.Printf("Starting health server on %s", address)
 
 	go func() { //nolint:gosec // fresh context needed for graceful shutdown after parent cancellation
 		<-ctx.Done()

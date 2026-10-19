@@ -132,11 +132,17 @@ Environment variables or JSON config file:
     "username": "admin",
     "password": "adminpwd",
     "backend_strategy": "use_existing"
+  },
+  "health": {
+    "address": ":8080"
   }
 }
 ```
 
 The haproxy address needs to be the endpoint of your Data plane API. Look at the official docs how to run it.
+
+`health.address` (env `HEALTH_ADDR`, default `:8080`) is where `/health` and `/metrics` listen. Change it when
+something else on the host uses port 8080.
 
 **Quick Data Plane API setup:**
 ```bash

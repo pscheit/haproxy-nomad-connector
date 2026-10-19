@@ -11,12 +11,18 @@ import (
 const (
 	DefaultDrainTimeoutSec = 10
 	DefaultCleanupDelaySec = 30
+	DefaultHealthAddress   = ":8080"
 )
 
 type Config struct {
 	Nomad   NomadConfig   `json:"nomad"`
 	HAProxy HAProxyConfig `json:"haproxy"`
 	Log     LogConfig     `json:"log"`
+	Health  HealthConfig  `json:"health"`
+}
+
+type HealthConfig struct {
+	Address string `json:"address"` // listen address of the health and metrics server
 }
 
 type NomadConfig struct {
@@ -59,6 +65,9 @@ func Load(configFile string) (*Config, error) {
 		},
 		Log: LogConfig{
 			Level: getEnv("LOG_LEVEL", "info"),
+		},
+		Health: HealthConfig{
+			Address: getEnv("HEALTH_ADDR", DefaultHealthAddress),
 		},
 	}
 
